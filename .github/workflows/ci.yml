@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    name: Tests, typing, lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements_test.txt
+      - name: Install dependencies
+        run: pip install -r requirements_test.txt
+      - name: Tests
+        run: pytest tests/ -q
+      - name: Strict typing
+        run: mypy custom_components/somfy_rts
+      - name: Lint
+        run: ruff check tests custom_components/somfy_rts
+
+  esphome:
+    name: ESPHome config (5 boards)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Install ESPHome
+        run: pip install esphome==2026.10.0
+      - name: Fill in the secrets template
+        run: |
+          cp secrets.yaml.example secrets.yaml
+          sed -i "s|api_key: .*|api_key: $(python -c 'import base64, os; print(base64.b64encode(os.urandom(32)).decode())')|" secrets.yaml
+      - name: Validate every board variant
+        run: |
+          cp esphome.yaml esphome_main.yaml
+          for board in esp32-s3-zero esp32-s3 esp32-classic esp32-c3 esp32-c6; do
+            echo "::group::${board}"
+            sed "s|board_package: esphome_boards/esp32-s3-zero.yaml|board_package: esphome_boards/${board}.yaml|" esphome_main.yaml > esphome.yaml
+            esphome config esphome.yaml
+            echo "::endgroup::"
+          done
+          mv esphome_main.yaml esphome.yaml

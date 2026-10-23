@@ -1,0 +1,18 @@
+# ESP32-S3-Zero (Waveshare) - default board of this project
+# CC1101 wiring: SCK->IO4, MISO->IO5, MOSI->IO6, CSN->IO7,
+#                GDO0->IO8 (TX), GDO2->IO1 (RX baseband)
+# On the N8R8 (8 MB flash) variant, change flash_size to 8MB.
+substitutions:
+  pin_sck: GPIO4
+  pin_miso: GPIO5
+  pin_mosi: GPIO6
+  pin_csn: GPIO7
+  pin_gdo0: GPIO8
+  pin_gdo2: GPIO1  # GDO2 = RX baseband
+
+esp32:
+  board: esp32-s3-devkitc-1
+  flash_size: 4MB
+  variant: esp32s3
+  framework:
+    type: arduino

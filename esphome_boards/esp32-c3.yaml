@@ -1,0 +1,15 @@
+# ESP32-C3 (DevKitM-1, SuperMini)
+# CSN on GPIO0 works thanks to the module pull-up.
+substitutions:
+  pin_sck: GPIO4
+  pin_miso: GPIO5
+  pin_mosi: GPIO6
+  pin_csn: GPIO0
+  pin_gdo0: GPIO3
+  pin_gdo2: GPIO10  # GDO2 = RX baseband
+
+esp32:
+  board: esp32-c3-devkitm-1
+  variant: esp32c3
+  framework:
+    type: arduino

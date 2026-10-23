@@ -1,0 +1,15 @@
+# Classic ESP32 (WROOM-32, DevKitC, NodeMCU-32S, etc.)
+# No strapping pins involved.
+substitutions:
+  pin_sck: GPIO18
+  pin_miso: GPIO19
+  pin_mosi: GPIO23
+  pin_csn: GPIO5
+  pin_gdo0: GPIO16
+  pin_gdo2: GPIO17  # GDO2 = RX baseband
+
+esp32:
+  board: esp32dev
+  variant: esp32
+  framework:
+    type: arduino
