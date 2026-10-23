@@ -59,7 +59,8 @@ def test_estimator_restore_clamps():
 
 
 def test_estimator_interpolation(monkeypatch):
-    base = time.monotonic()
+    # Exact binary clock: (base + 0.5) - base == 0.5 on any platform.
+    base = 4096.0
     monkeypatch.setattr(time, "monotonic", lambda: base)
     est = PositionEstimator(open_time_ms=1000, close_time_ms=500)
 
@@ -79,7 +80,7 @@ def test_estimator_interpolation(monkeypatch):
 
 
 def test_estimator_close_interpolation(monkeypatch):
-    base = time.monotonic()
+    base = 4096.0
     monkeypatch.setattr(time, "monotonic", lambda: base)
     est = PositionEstimator(open_time_ms=1000, close_time_ms=200)
 
@@ -1333,22 +1334,24 @@ def test_group_position_shadows_members(hass, fake_rf, no_timer, monkeypatch):
     async def scenario():
         group, members = build_group_with_members(hass)
 
-        base = time.monotonic()
+        # Exact binary clock: (base + 0.5) - base == 0.5 on any
+        # platform, so the position assertions are deterministic.
+        base = 4096.0
         monkeypatch.setattr(time, "monotonic", lambda: base)
-        await group.async_set_cover_position(position=30)
+        await group.async_set_cover_position(position=50)
         for member in members:
             assert member.is_closing
-            assert member._position_estimator.target == 30
+            assert member._position_estimator.target == 50
             assert member._shadow_tracking is True
 
         # Le temps passe : chaque membre avance a SA vitesse propre.
-        # Volet 0 (1 s) arrive a 30 ; Volet 1 (0,5 s), plus rapide,
+        # Volet 0 (1 s) arrive a 50 ; Volet 1 (0,5 s), plus rapide,
         # est deja en butee basse - physiquement coherent.
         frames = len(fake_rf.sent)
-        monkeypatch.setattr(time, "monotonic", lambda: base + 0.7)
+        monkeypatch.setattr(time, "monotonic", lambda: base + 0.5)
         await members[0]._async_movement_tick(None)
         await members[1]._async_movement_tick(None)
-        assert members[0].current_cover_position == 30
+        assert members[0].current_cover_position == 50
         assert members[1].current_cover_position == 0
         for member in members:
             assert member._shadow_tracking is False
