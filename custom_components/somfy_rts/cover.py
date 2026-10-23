@@ -138,9 +138,9 @@ class PositionEstimator:
         position = self.position
         if self._direction == "up" and position >= (self._target or 100):
             return True
-        if self._direction == "down" and position <= (self._target or 0):
-            return True
-        return False
+        return bool(
+            self._direction == "down" and position <= (self._target or 0)
+        )
 
     def restore(self, position: int) -> None:
         """Restore a previously persisted position."""

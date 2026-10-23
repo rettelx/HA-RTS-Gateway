@@ -459,9 +459,11 @@ def decode_timings(timings: list[int]) -> RTSFrame | None:
         frame[1] |= stored
 
         # Verify the 80-bit extension checksum.
-        if bits == FRAME_BITS_80:
-            if (frame[9] & 0x0F) != _checksum80(frame[7], frame[8], frame[9]):
-                continue
+        if (
+            bits == FRAME_BITS_80
+            and (frame[9] & 0x0F) != _checksum80(frame[7], frame[8], frame[9])
+        ):
+            continue
 
         control = frame[1] >> 4
         command, step = _translate_control(control, frame, bits)
