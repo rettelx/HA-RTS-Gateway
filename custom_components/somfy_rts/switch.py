@@ -109,7 +109,6 @@ class SomfyRTSSwitch(TransmitterAvailabilityMixin, SwitchEntity, RestoreEntity):
             name=device_config.get(CONF_NAME, f"Somfy RTS {self._address}"),
             manufacturer="Somfy",
             model=SomfyDeviceType.SOCKET.value,
-            via_device=(DOMAIN, self._transmitter_id),
         )
         self._attr_icon = DEVICE_TYPE_MAPPING.get(SomfyDeviceType.SOCKET, {}).get("icon")
         self._attr_is_on = False

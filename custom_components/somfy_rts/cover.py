@@ -229,7 +229,6 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
             name=device_config.get(CONF_NAME, f"Somfy RTS {self._address}"),
             manufacturer="Somfy",
             model=device_type_label(self._hass, self._device_type),
-            via_device=(DOMAIN, self._transmitter_id),
         )
         self._attr_device_class = DEVICE_TYPE_TO_DEVICE_CLASS.get(self._device_type)
 

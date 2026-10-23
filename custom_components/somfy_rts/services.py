@@ -8,7 +8,9 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-import voluptuous as vol
+# probatio is Home Assistant's validation library, a drop-in
+# successor of voluptuous (same API surface).
+import probatio as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ENTITY_ID
 from homeassistant.core import HomeAssistant, ServiceCall

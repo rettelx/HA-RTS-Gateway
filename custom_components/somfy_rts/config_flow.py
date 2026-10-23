@@ -6,7 +6,9 @@ import logging
 import time
 from typing import Any
 
-import voluptuous as vol
+# probatio is Home Assistant's validation library, a drop-in
+# successor of voluptuous (same API surface).
+import probatio as vol
 from homeassistant.config_entries import (
     ConfigFlow,
     ConfigFlowResult,

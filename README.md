@@ -82,7 +82,8 @@ substitutions:
    par git ; les mises à jour OTA sont protégées par la clé API).
 3. Une fois la passerelle connectée, son entité `radio_frequency.*`
    apparaît dans Home Assistant (périphérique « RTS Gateway »).
-4. Paramètres → Appareils et services → Ajouter une intégration →
+4. Dans Home Assistant **2026.10 ou plus récent** : Paramètres →
+   Appareils et services → Ajouter une intégration →
    **Somfy RTS Gateway**.
 5. Sélectionnez le transmetteur, puis ajoutez vos appareils.
 

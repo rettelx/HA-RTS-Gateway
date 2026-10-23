@@ -95,7 +95,6 @@ class SomfyRTSSensor(TransmitterAvailabilityMixin, BinarySensorEntity):
             name=self._name,
             manufacturer="Somfy",
             model=localized_label(self._hass, SENSOR_MODEL_LABELS, "RTS sun/wind sensor"),
-            via_device=(DOMAIN, sensor_config.get(CONF_TRANSMITTER_ID, "")),
         )
         self._attr_translation_key = kind
         self._attr_is_on = False

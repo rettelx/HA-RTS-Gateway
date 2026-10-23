@@ -128,7 +128,6 @@ class SomfyRTSLight(TransmitterAvailabilityMixin, LightEntity, RestoreEntity):
             name=device_config.get(CONF_NAME, f"Somfy RTS {self._address}"),
             manufacturer="Somfy",
             model=SomfyDeviceType.LIGHT.value,
-            via_device=(DOMAIN, self._transmitter_id),
         )
         self._attr_icon = DEVICE_TYPE_MAPPING.get(SomfyDeviceType.LIGHT, {}).get("icon")
 

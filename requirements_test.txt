@@ -1,12 +1,14 @@
 # Development / test dependencies of the somfy_rts integration.
 # Install with: pip install -r requirements_test.txt
-homeassistant>=2026.5.4
-voluptuous>=0.16.0
-PyYAML>=6.0
+# Pinned to the Home Assistant version the integration targets:
+# probatio (its validation library) only ships from 2026.10.
+homeassistant==2026.10.2
+probatio>=0.13
 # The integration imports rf-protocols directly (RTS frames) and through
 # the radio_frequency component; pip does not install component
 # requirements of the homeassistant package.
 rf-protocols==4.3.0
+PyYAML>=6.0
 pytest>=9.1
 mypy>=2.4
 ruff>=0.17
