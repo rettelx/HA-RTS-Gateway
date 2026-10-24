@@ -6,6 +6,8 @@
 [![GH-code-size](https://img.shields.io/github/languages/code-size/rettelx/HA-RTS-Gateway.svg?color=red&style=flat-square)](https://github.com/rettelx/HA-RTS-Gateway)
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg?style=flat-square)](https://github.com/hacs)
 
+![RTS Gateway in Home Assistant](screenshots/integration.png)
+
 ## 📌 Overview
 
 **RTS Gateway** is an **unofficial** Home Assistant integration that lets you control your **RTS shutters, blinds, curtains, awnings and gates** (Somfy and compatible) directly from Home Assistant — **no cloud, no subscription and no proprietary hub**.
@@ -170,6 +172,8 @@ Notes:
    **Settings → Devices & Services → Add integration**
 2. Search for **RTS Gateway**
 3. Select the transmitter, then add your devices
+
+![The pairing wizard in Home Assistant](screenshots/wizard.png)
 
 ### Pairing a device
 
