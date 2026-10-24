@@ -80,8 +80,11 @@ class SomfyRTSButtonBase(TransmitterAvailabilityMixin, ButtonEntity):
             self._entry.data.get(CONF_TRANSMITTER_ID, "")
         )
         self._attr_has_entity_name = True
-        key = type(self)._attr_translation_key
-        self._attr_unique_id = f"{DOMAIN}_{self._address}_{key}"
+        # Read the instance property: on HA 2026.10+ the class-level
+        # _attr_translation_key is a property object, whose repr embeds
+        # a memory address -- unique_ids built from it changed at every
+        # restart and collided between the two button classes.
+        self._attr_unique_id = f"{DOMAIN}_{self._address}_{self.translation_key}"
         self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, self._address)})
 
 class SomfyRTSGotoMyButton(SomfyRTSButtonBase):

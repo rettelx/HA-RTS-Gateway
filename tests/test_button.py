@@ -43,8 +43,14 @@ def test_setup_creates_buttons_per_type(hass):
     keys = sorted(b.translation_key for b in added)
     # Volet : MY + recalage. Prise : aucun bouton (services only).
     assert keys == ["goto_my_position", "recalibrate"]
-    # Chaque entite a un unique_id stable (checklist entity-unique-id).
-    assert all(b.unique_id for b in added)
+    # Chaque entite a un unique_id stable, derive de l'adresse et de la
+    # cle de traduction (checklist entity-unique-id). Regressions: un
+    # unique_id lu sur la classe (objet property sur HA >= 2026.10)
+    # changeait a chaque redemarrage et collidait entre les 2 boutons.
+    assert {b.unique_id for b in added} == {
+        "rts_gateway_12345678_goto_my_position",
+        "rts_gateway_12345678_recalibrate",
+    }
 
 
 def test_my_and_recal_buttons_call_the_cover(hass, fake_rf, no_timer):
