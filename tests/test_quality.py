@@ -166,6 +166,10 @@ def test_manifest_quality_keys():
     # HACS publishing requirements (hacs.xyz/docs/publish/integration).
     for key in ("documentation", "issue_tracker", "name", "version"):
         assert manifest.get(key), key
+    # Integration categories (contributors.home-assistant.io), 1 to 3.
+    categories = manifest.get("categories", [])
+    assert 1 <= len(categories) <= 3
+    assert all(c.split(".")[0] for c in categories)
     assert not manifest["version"].startswith("v")
     for url in (manifest["documentation"], manifest["issue_tracker"]):
         assert url.startswith("https://"), url
