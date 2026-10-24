@@ -1,9 +1,9 @@
 # RTS Gateway
 
-[![GH-release](https://img.shields.io/github/v/release/xavier-rettel/somfy_rts_ha.svg?style=flat-square)](https://github.com/rettelx/HA-RTS-Gateway/releases)
-[![GH-downloads](https://img.shields.io/github/downloads/xavier-rettel/somfy_rts_ha/total?style=flat-square)](https://github.com/rettelx/HA-RTS-Gateway/releases)
-[![GH-last-commit](https://img.shields.io/github/last-commit/xavier-rettel/somfy_rts_ha.svg?style=flat-square)](https://github.com/rettelx/HA-RTS-Gateway/commits/main)
-[![GH-code-size](https://img.shields.io/github/languages/code-size/xavier-rettel/somfy_rts_ha.svg?color=red&style=flat-square)](https://github.com/rettelx/HA-RTS-Gateway)
+[![GH-release](https://img.shields.io/github/v/release/rettelx/HA-RTS-Gateway.svg?style=flat-square)](https://github.com/rettelx/HA-RTS-Gateway/releases)
+[![GH-downloads](https://img.shields.io/github/downloads/rettelx/HA-RTS-Gateway/total?style=flat-square)](https://github.com/rettelx/HA-RTS-Gateway/releases)
+[![GH-last-commit](https://img.shields.io/github/last-commit/rettelx/HA-RTS-Gateway.svg?style=flat-square)](https://github.com/rettelx/HA-RTS-Gateway/commits/main)
+[![GH-code-size](https://img.shields.io/github/languages/code-size/rettelx/HA-RTS-Gateway.svg?color=red&style=flat-square)](https://github.com/rettelx/HA-RTS-Gateway)
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg?style=flat-square)](https://github.com/hacs)
 
 ## 📌 Overview
