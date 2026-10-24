@@ -10,14 +10,16 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 
 import pytest
 import yaml
 
-from custom_components.somfy_rts import const
-from custom_components.somfy_rts.const import DOMAIN
+from custom_components.rts_gateway import config_flow, const
+from custom_components.rts_gateway.const import DOMAIN
 
-COMPONENT_DIR = "custom_components/somfy_rts"
+REPO_ROOT = Path(__file__).parent.parent
+COMPONENT_DIR = "custom_components/rts_gateway"
 
 
 def _load(path):
@@ -161,6 +163,18 @@ def test_manifest_quality_keys():
     assert manifest["codeowners"], "integration-owner"
     assert "radio_frequency" in manifest["dependencies"]
     assert manifest["iot_class"]
+    # HACS publishing requirements (hacs.xyz/docs/publish/integration).
+    for key in ("documentation", "issue_tracker", "name", "version"):
+        assert manifest.get(key), key
+    assert not manifest["version"].startswith("v")
+    for url in (manifest["documentation"], manifest["issue_tracker"]):
+        assert url.startswith("https://"), url
+
+
+def test_hacs_brand_assets():
+    """HACS listing icons: a brand directory with an icon.png."""
+    assert (REPO_ROOT / "brand" / "icon.png").is_file()
+    assert (REPO_ROOT / "brand" / "icon@2x.png").is_file()
 
 
 def test_data_descriptions_match_field_names(strings, fr):
@@ -171,6 +185,30 @@ def test_data_descriptions_match_field_names(strings, fr):
                 fields = set(step.get("data", {}))
                 for desc_key in step.get("data_description", {}):
                     assert desc_key in fields, desc_key
+                for form_section in step.get("sections", {}).values():
+                    fields = set(form_section.get("data", {}))
+                    for desc_key in form_section.get("data_description", {}):
+                        assert desc_key in fields, desc_key
+
+
+def test_device_option_fields_translated(strings, fr):
+    """device_options: a lone section renders flat, so its field
+    labels must also exist at step level (not only in sections)."""
+    fields = set()
+    for device_type in const.SomfyDeviceType:
+        for protocol in const.SomfyProtocol:
+            keys = config_flow._device_option_fields(
+                {
+                    const.CONF_DEVICE_TYPE: device_type.value,
+                    const.CONF_PROTOCOL: protocol.value,
+                }
+            )
+            fields |= {key.schema for key in keys}
+    for lang in (strings, fr):
+        for flow in ("config", "options"):
+            step = lang[flow]["step"]["device_options"]
+            missing = fields - set(step["data"])
+            assert not missing, (flow, sorted(missing))
 
 
 def test_no_hardcoded_french_entity_names():

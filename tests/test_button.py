@@ -7,9 +7,9 @@ import asyncio
 from conftest import make_runtime_data
 from fakes import FakeConfigEntry, make_device, prepare_entity
 
-from custom_components.somfy_rts import button
-from custom_components.somfy_rts.cover import SomfyRTSCover
-from custom_components.somfy_rts.rolling_code import RollingCodeStore
+from custom_components.rts_gateway import button
+from custom_components.rts_gateway.cover import SomfyRTSCover
+from custom_components.rts_gateway.rolling_code import RollingCodeStore
 
 
 def make_entry(devices):
@@ -25,7 +25,7 @@ def make_entry(devices):
 
 
 def setup_button_entities(hass, devices):
-    hass.data.setdefault("somfy_rts", {})[
+    hass.data.setdefault("rts_gateway", {})[
         "rolling_codes"
     ] = RollingCodeStore(hass)
     entry = make_entry(devices)

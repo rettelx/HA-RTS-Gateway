@@ -227,3 +227,6 @@ secrets.yaml
 
 # IDE (PyCharm/IntelliJ)
 .idea/
+
+# Icon
+/icon.psd

@@ -1,4 +1,4 @@
-"""Test doubles for the Home Assistant parts of the Somfy RTS integration.
+"""Test doubles for the Home Assistant parts of the RTS integration.
 
 These fakes cover exactly the surface of ``HomeAssistant`` used by the
 integration: ``hass.data``, the event bus, the service registry, the
@@ -11,7 +11,7 @@ import asyncio
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
-from custom_components.somfy_rts.const import (
+from custom_components.rts_gateway.const import (
     DEFAULT_BRIGHTNESS_STEP_PERCENT,
     DEFAULT_STEP_SIZE,
     DEFAULT_TILT_STEP_PERCENT,
@@ -103,6 +103,49 @@ class FakeConfigEntries:
         self.reloads.append(entry_id)
 
 
+class FakeDeviceEntry:
+    """Minimal DeviceEntry stand-in."""
+
+    def __init__(self, id, config_entry_id, identifiers=()):
+        self.id = id
+        self.config_entry_id = config_entry_id
+        self.identifiers = set(identifiers)
+
+
+class FakeDeviceItems:
+    """Items view matching what async_entries_for_config_entry uses."""
+
+    def __init__(self) -> None:
+        self._items: dict[str, FakeDeviceEntry] = {}
+
+    def get_devices_for_config_entry_id(self, config_entry_id):
+        return [
+            d for d in self._items.values()
+            if d.config_entry_id == config_entry_id
+        ]
+
+
+class FakeDeviceRegistry:
+    """Records devices and removals like the device registry."""
+
+    def __init__(self) -> None:
+        self._devices = FakeDeviceItems()
+        self.removed: list[str] = []
+
+    def async_get_or_create(self, config_entry_id, identifiers):
+        device = FakeDeviceEntry(
+            id=f"dev{len(self._devices._items)}",
+            config_entry_id=config_entry_id,
+            identifiers=identifiers,
+        )
+        self._devices._items[device.id] = device
+        return device
+
+    def async_remove_device(self, device_id):
+        self.removed.append(device_id)
+        self._devices._items.pop(device_id, None)
+
+
 class FakeHass:
     """Minimal HomeAssistant stand-in."""
 
@@ -112,6 +155,7 @@ class FakeHass:
         self.services = FakeServiceRegistry()
         self.config_entries = FakeConfigEntries()
         self.states = FakeStates()
+        self.data["device_registry"] = FakeDeviceRegistry()
 
     def async_create_task(self, target):
         return asyncio.get_running_loop().create_task(target)
@@ -120,7 +164,7 @@ class FakeHass:
 class FakeConfigEntry:
     """Minimal ConfigEntry stand-in."""
 
-    def __init__(self, entry_id="test_entry", domain="somfy_rts", data=None, options=None, runtime_data=None):
+    def __init__(self, entry_id="test_entry", domain="rts_gateway", data=None, options=None, runtime_data=None):
         self.entry_id = entry_id
         self.runtime_data = runtime_data
         self.domain = domain

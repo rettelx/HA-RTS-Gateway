@@ -6,9 +6,9 @@ import asyncio
 
 from fakes import FakeConfigEntry, make_device, prepare_entity
 
-from custom_components.somfy_rts.const import SomfyCommand
-from custom_components.somfy_rts.rolling_code import RollingCodeStore
-from custom_components.somfy_rts.switch import SomfyRTSSwitch
+from custom_components.rts_gateway.const import SomfyCommand
+from custom_components.rts_gateway.rolling_code import RollingCodeStore
+from custom_components.rts_gateway.switch import SomfyRTSSwitch
 
 
 def build_switch(hass, **device_overrides):
@@ -24,16 +24,16 @@ def build_switch(hass, **device_overrides):
         },
         runtime_data=make_runtime_data(),
     )
-    hass.data.setdefault("somfy_rts", {})["rolling_codes"] = RollingCodeStore(hass)
+    hass.data.setdefault("rts_gateway", {})["rolling_codes"] = RollingCodeStore(hass)
     entity = SomfyRTSSwitch(hass, entry, device)
     prepare_entity(entity, "switch.test")
     return entity
 
 
 def test_setup_only_creates_sockets(hass):
-    from custom_components.somfy_rts import switch
+    from custom_components.rts_gateway import switch
 
-    hass.data["somfy_rts"] = {"rolling_codes": RollingCodeStore(hass)}
+    hass.data["rts_gateway"] = {"rolling_codes": RollingCodeStore(hass)}
     entry = FakeConfigEntry(
         data={
             "devices": [

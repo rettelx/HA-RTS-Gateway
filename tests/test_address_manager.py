@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from fakes import FakeConfigEntry
 
-from custom_components.somfy_rts import address_manager
-from custom_components.somfy_rts.const import DOMAIN
+from custom_components.rts_gateway import address_manager
+from custom_components.rts_gateway.const import DOMAIN
 
 
 def test_is_address_valid():
@@ -105,8 +105,8 @@ def test_generated_addresses_avoid_group_range(hass):
     """Les adresses d'appareils generee ne tombent jamais dans la plage groupe."""
     import random
 
-    from custom_components.somfy_rts import address_manager
-    from custom_components.somfy_rts.const import (
+    from custom_components.rts_gateway import address_manager
+    from custom_components.rts_gateway.const import (
         GROUP_ADDRESS_MAX,
         GROUP_ADDRESS_MIN,
     )
@@ -124,7 +124,7 @@ def test_used_addresses_skips_invalid_sensor(hass):
     """Un capteur avec une adresse non numerique est ignore."""
     from fakes import FakeConfigEntry
 
-    from custom_components.somfy_rts import address_manager
+    from custom_components.rts_gateway import address_manager
 
     entry = FakeConfigEntry(
         data={

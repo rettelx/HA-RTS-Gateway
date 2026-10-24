@@ -1,266 +1,344 @@
-# Somfy RTS Gateway
+# RTS Gateway
 
-Pilotez vos volets, stores et portails Somfy RTS depuis Home Assistant —
-sans cloud, sans passerelle propriétaire : une carte ESP32, un module
-CC1101 et cette intégration.
+[![GH-release](https://img.shields.io/github/v/release/xavier-rettel/somfy_rts_ha.svg?style=flat-square)](https://github.com/rettelx/HA-RTS-Gateway/releases)
+[![GH-downloads](https://img.shields.io/github/downloads/xavier-rettel/somfy_rts_ha/total?style=flat-square)](https://github.com/rettelx/HA-RTS-Gateway/releases)
+[![GH-last-commit](https://img.shields.io/github/last-commit/xavier-rettel/somfy_rts_ha.svg?style=flat-square)](https://github.com/rettelx/HA-RTS-Gateway/commits/main)
+[![GH-code-size](https://img.shields.io/github/languages/code-size/xavier-rettel/somfy_rts_ha.svg?color=red&style=flat-square)](https://github.com/rettelx/HA-RTS-Gateway)
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-orange.svg?style=flat-square)](https://github.com/hacs)
 
-> Cette intégration a été créée avec l'aide de Mistral AI.
+## 📌 Overview
 
-## En bref
+**RTS Gateway** is an **unofficial** Home Assistant integration that lets you control your **RTS shutters, blinds, curtains, awnings and gates** (Somfy and compatible) directly from Home Assistant — **no cloud, no subscription and no proprietary hub**.
 
-- **Volets, stores, rideaux, bannes, portails et portes de garage** RTS :
-  position estimée, inclinaison, position favorite (MY).
-- **Prises et éclairages RTS**, capteurs **soleil/vent** (Sunis, Eolis, Soliris).
-- **Groupes RTS** : plusieurs volets, une seule commande.
-- **Télécommandes physiques** : Home Assistant suit leur utilisation.
-- Codes tournants persistés : les moteurs ne se désappairent pas.
+Everything goes through a radio gateway you build yourself: an **ESP32** board and a **CC1101** module, roughly ten euros of hardware. The integration transmits RTS frames (including rolling codes, persisted in Home Assistant), **listens to your existing physical remotes**, and keeps a position estimate up to date even when a shutter is moved by hand.
 
-## Matériel
+This project is not developed or maintained by Somfy. It builds on the community-documented RTS protocol and on Home Assistant's native `radio_frequency` integration.
 
-- 1 × ESP32 ([variantes prises en charge](#variantes-esp32))
-- 1 × module CC1101
-- 1 × antenne 433 MHz
+> This integration was created with the help of Mistral Vibe.
 
-Le CC1101 fait tout : **émission et réception** sur la vraie fréquence RTS
-(**433,42 MHz** — pas 433,92 MHz).
+---
 
-| Broche CC1101 | Rôle |
+## ⚠️ Testing status
+
+Only the following parts have been tested by the author on real hardware:
+
+- **56-bit RTS roller shutters** (position estimate, MY position, recalibration);
+- **shutter groups**;
+- **physical remotes** (antenna detection, command tracking).
+
+Everything else is implemented from the protocol documentation but has **not been tested on real hardware**. In particular, the **80-bit RTS protocol is UNTESTED** (step-wheel motors and Modulis/Situo-style remotes): no 80-bit device has been tried with this gateway. The same goes for the **light and switch platforms** (On/Off sockets, dimmers and light receivers), sun/wind sensors, tilt (56 and 80 bit), gates and curtains. Feedback on any of these is welcome.
+
+---
+
+## ✅ Features
+
+### 🪟 Covers
+
+Roller shutters, shutters, venetian blinds, curtains (left/right/center opening), awnings, garage doors (1 or 3 buttons) and gates (left/right/center, 1 button):
+
+- **estimated position** based on travel times (RTS has no position feedback: the estimate is re-anchored by a calibration cycle);
+- **MY favorite position**, simulated by Home Assistant or native depending on the motor;
+- **tilt** for venetian blinds: 80-bit step wheel or 56-bit timed motor;
+- two everyday buttons: *MY position* and *Position recalibration*.
+
+### 👥 RTS groups
+
+A group is not a device: it is an extra RTS address paired into the memory of several motors. The integration creates the address (reserved range 1,000,000 – 2,097,151), walks you through pairing each member, then **drives all shutters with a single frame**. Member entities follow the movement at their own speed, and the group's displayed position is the average of its members — even when one of them is operated individually.
+
+### 🎮 Physical remotes
+
+Your existing remotes keep working — and Home Assistant **tracks their use**: every received frame updates the position estimate of the matching shutter, group or individual cover. You do not need to know a remote's address in advance: the assistant detects the addresses seen over the air while you press buttons.
+
+### 💡 Sockets, lights, sensors — ⚠️ UNTESTED
+
+On/Off RTS sockets (`switch`), dimmer sockets and light receivers (`light`), sun/wind sensors Sunis / Eolis / Soliris (`binary_sensor`, wind and sun alarms reported as attributes on linked shutters). The detailed model list is in the Installation section. **This whole part is untested on real hardware** — see the testing status above.
+
+### 🧩 Services and events
+
+About a dozen services (MY position, recalibration, pairing, raw commands…) and a `rts_gateway_frame` event fired for **every decoded frame** — enough to trigger automations from physical remote buttons. See the Services section below.
+
+---
+
+## 🔧 Required hardware
+
+- 1 × ESP32-S3-Zero (Waveshare) — the only board tested with this project (it should work with similar boards, contributions welcome!)
+- 1 × CC1101 module
+- 1 × 433 MHz antenna
+
+The CC1101 does everything: **transmit and receive** on the  RTS frequency, **433.42 MHz**.
+
+| CC1101 pin | Role |
 |---|---|
-| GDO0 | émission (TX) |
-| GDO2 | réception (RX) |
+| GDO0 | transmit (TX) |
+| GDO2 | receive (RX) |
 | SCK / MISO / MOSI / CSN | SPI |
 
-Les broches ESP32 se définissent en **une ligne** du `esphome.yaml` :
+The board is selected in **one line** of `esphome.yaml` — the gateway
+itself only needs SPI, one output pin and one input pin:
 
 ```yaml
 substitutions:
-  board_package: esphome_boards/esp32-s3-zero.yaml   # selon votre carte
+  board_package: esphome_boards/esp32-s3-zero.yaml   # board + pin map
 ```
 
-<details>
-<summary><h3 id="variantes-esp32">Variantes ESP32 prises en charge</h3></summary>
+### Board variants
 
-| Variante | Fichier | SCK / MISO / MOSI / CSN / GDO0 / GDO2 | Framework |
-|---|---|---|---|
-| ESP32-S3-Zero Waveshare (défaut) | `esp32-s3-zero.yaml` | 4 / 5 / 6 / 7 / 8 / 1 | Arduino |
-| ESP32-S3 DevKitC-1 | `esp32-s3.yaml` | 4 / 5 / 6 / 0 / 3 / 10 | Arduino |
-| ESP32 WROOM-32, DevKitC, NodeMCU-32S | `esp32-classic.yaml` | 18 / 19 / 23 / 5 / 16 / 17 | Arduino |
-| ESP32-C3 DevKitM-1, SuperMini | `esp32-c3.yaml` | 4 / 5 / 6 / 0 / 3 / 10 | Arduino |
-| ESP32-C6 DevKitC-1 | `esp32-c6.yaml` | 18 / 19 / 20 / 21 / 6 / 11 | ESP-IDF |
+Only the **ESP32-S3-Zero (Waveshare)** has been tested with this
+project — it is the default board, wired as follows (defined in
+`esphome_boards/esp32-s3-zero.yaml`):
 
-- Sur le S3-Zero, seuls des pads « sûrs » sont utilisés (GPIO0, GPIO33-37
-  et GPIO21 sont exclus). Flash annoncé à 4 Mo : ajuster pour la N8R8.
-- Les broches évitent les strapping pins, sauf CSN/GDO0 sur S3/C3 qui
-  fonctionnent en pratique. Si la carte refuse de démarrer avec le CC1101,
-  déplacez CSN/GDO0 (ex. GPIO10/GPIO7).
-- Autre carte : copiez le fichier le plus proche et adaptez `esp32:board`
-  et les broches.
+| CC1101 | SCK | MISO | MOSI | CSN | GDO0 (TX) | GDO2 (RX) |
+|---|---|---|---|---|---|---|
+| ESP32-S3-Zero | IO4 | IO5 | IO6 | IO7 | IO8 | IO1 |
 
-</details>
 
-<details>
-<summary><h3>Fonctionnement radio et pièges de câblage</h3></summary>
+Other ESP32 boards should work but are **untested**. The configuration
+is modular: each board is a small ESPHome package in `esphome_boards/`
+(board, framework and pin map) pulled in by the single `board_package`
+line above — the rest of `esphome.yaml` is board-agnostic. The
+Installation section below has a **step-by-step guide** for adapting
+another board (board ids, variant, flash size, pin pitfalls), and if
+yours works, open a pull request: contributions welcome!
 
-- **RX** : le CC1101 démodule l'OOK et sort le signal baseband sur GDO2,
-  capté par un `remote_receiver`.
-- **TX** : le `remote_transmitter` module GDO0 (RMT) ; le CC1101 en mode
-  « async serial » génère la porteuse.
-- **Ne déclarez pas `gdo0_pin` sur le composant `cc1101`** (ESP32, OOK) :
-  son appel à `pin_mode()` re-route le pad et coupe la liaison RMT → GDO0.
-  Résultat : émission muette, sans aucune erreur (esphome/esphome#16876).
-- Ne reliez pas GDO0 et GDO2 entre eux.
 
-</details>
+---
 
-## Installation
+## 🚀 Installation
 
-1. Copiez `custom_components/somfy_rts` dans `config/custom_components/`.
-2. Flashez l'ESP32 avec `esphome.yaml` — gardez `esphome_components/` à
-   côté du YAML (composant local de décodage RTS). Copiez
-   `secrets.yaml.example` en `secrets.yaml` et renseignez
-   `wifi_ssid`, `wifi_password`, `api_key` (le fichier réel est ignoré
-   par git ; les mises à jour OTA sont protégées par la clé API).
-3. Une fois la passerelle connectée, son entité `radio_frequency.*`
-   apparaît dans Home Assistant (périphérique « RTS Gateway »).
-4. Dans Home Assistant **2026.10 ou plus récent** : Paramètres →
-   Appareils et services → Ajouter une intégration →
-   **Somfy RTS Gateway**.
-5. Sélectionnez le transmetteur, puis ajoutez vos appareils.
+### 1️⃣ Prepare the ESPHome gateway
 
-<details>
-<summary><h3>Appairer un appareil</h3></summary>
+1. Copy `secrets.yaml.example` to `secrets.yaml` and fill in
+   `wifi_ssid`, `wifi_password`, `api_key` (the real file is ignored by
+   git; OTA updates are protected by the API key).
+2. Flash the ESP32 with `esphome.yaml`, keeping `esphome_components/`
+   next to the YAML (local RTS decoding component).
+3. Once the gateway is connected, its `radio_frequency.*` entity appears
+   in Home Assistant ("RTS Gateway" device).
 
-L'appairage suit la procédure Somfy, guidée par l'assistant :
+#### No ESP32-S3-Zero? Any ESP32 board can be used
 
-1. Maintenez **PROG** sur une télécommande physique appairée au moteur,
-   jusqu'à son petit va-et-vient (mémoire ouverte).
-2. Laissez l'assistant envoyer la commande d'appairage.
+The S3-Zero is only the tested default: everything board-specific
+lives in a small package file under `esphome_boards/` and the rest of
+`esphome.yaml` is board-agnostic. To use another board:
 
-Appairage entièrement depuis Home Assistant : services
-`enter_programming_mode` puis `send_prog` à la suite.
+1. **Copy the board package**:
+   `esphome_boards/esp32-s3-zero.yaml` → `esphome_boards/my-board.yaml`.
+2. **Adjust the `esp32:` block** to your board:
+   - `board:` — your board's ESPHome id (`esp32dev` for a classic
+     ESP32 DevKit, `esp32-c3-devkitm-1` for a C3, `esp32-s2-saola-1`…),
+   - `variant:` — `esp32`, `esp32s2`, `esp32s3` or `esp32c3`,
+   - `flash_size:` — match your module (4MB is the safe default),
+   - `framework:` — leave the Arduino framework unless your board
+     requires ESP-IDF.
+3. **Remap the pins** in the same file. The gateway needs 4 SPI pins,
+   one **output** pin for GDO0 (TX) and one **input** pin for GDO2 (RX).
+4. **Point `esphome.yaml` at your package**:
 
-En cas de renommage de la passerelle, réparez l'entrée via
-Modifier → Changer l'émetteur RF.
+   ```yaml
+   substitutions:
+     board_package: esphome_boards/my-board.yaml   # board + pin map
+   ```
 
-</details>
+5. **Flash** (`esphome run esphome.yaml`) and wire the CC1101 to the
+   pins you chose — everything else (CC1101 setup, RTS component,
+   radio_frequency entity) is board-independent.
 
-<details>
-<summary><h3>Appareils pris en charge</h3></summary>
+Notes:
 
-| Plateforme HA | Appareils RTS |
-|---|---|
-| `cover` | Volets roulants et volets, stores vénitiens (inclinaison 56 et 80 bits), rideaux (ouverture G/D/centre), bannes, portes de garage (1/3 boutons), portails (G/D/centre, 1 bouton) |
-| `switch` | Prises On/Off RTS (2401091, 2401093, 2401363), récepteurs de contact |
-| `light` | Prise variateur 200 W (2401092), récepteurs éclairage RTS (1811251, 1822215), gammes pilotables par Modulis |
-| `binary_sensor` | Capteurs soleil/vent Sunis, Eolis, Soliris (alerte vent + alerte soleil) |
+- **ESP8266 boards are not supported**: the transmitter uses the
+  ESP32 RMT peripheral and its non-blocking send queue.
+- If your board works, please open a pull request adding its package
+  to `esphome_boards/` — contributions welcome!
 
-Non couverts, volontairement : contacts secs sur relais GPIO, moteurs
-**io-homecontrol**, émission **RTW/RTV** (433,92 MHz).
+### 2️⃣ Install the integration
 
-</details>
+**Via HACS (recommended)**:
 
-### Via HACS
+1. Open **HACS**
+2. Go to **⋮ → Custom repositories**
+3. Add:
+   - **Repository**: `https://github.com/rettelx/HA-RTS-Gateway`
+   - **Category**: `Integration`
+4. Download **RTS Gateway**, then restart Home Assistant
 
-Le dépôt peut être ajouté comme dépôt personnalisé HACS :
+**Manually**: copy `custom_components/rts_gateway` into
+`config/custom_components/`, then restart.
 
-1. HACS → ⋮ → *Dépôts personnalisés*.
-2. Ajoutez l'URL du dépôt, catégorie **Intégration**.
-3. Téléchargez « Somfy RTS Gateway », puis redémarrez Home
-   Assistant.
+### 3️⃣ Configure the integration
 
-## Utiliser vos volets
+1. In Home Assistant **2026.10 or newer**, go to
+   **Settings → Devices & Services → Add integration**
+2. Search for **RTS Gateway**
+3. Select the transmitter, then add your devices
 
-Chaque volet expose une entité `cover` avec position estimée (durées
-d'ouverture/fermeture configurables), plus deux boutons d'usage courant :
-**Position MY** et **Recalage position**.
+### Pairing a device
 
-### Position MY (favorite)
+Pairing follows the Somfy procedure, guided by the assistant:
 
-- `my_position` (défaut 50 %) s'enregistre via le wizard ou le service
-  `set_my_position`.
-- Le réglage **MY simulé** (défaut) convient aux moteurs sans vraie
-  position MY : Home Assistant pilote le volet jusqu'à `my_position`.
-  Un appui MY court sur la télécommande physique déclenche le même
-  déplacement — l'antenne l'entend, HA conduit le volet.
-- Le réglage **MY natif** convient aux moteurs qui mémorisent leur
-  favorite : une trame MY suffit, et le bouton *Mémoriser position MY*
-  écrit la position courante dans le moteur et dans HA.
+1. Hold **PROG** on a physical remote already paired with the motor,
+   until the motor jogs briefly (memory open).
+2. Let the assistant send the pairing command.
 
-### Paramètres modifiables à tout moment
+Pairing entirely from Home Assistant: the `enter_programming_mode`
+and `send_prog` services, one after the other.
 
-Réglages → Appareils et services → **Somfy RTS Gateway** → Modifier :
+If the gateway is renamed, repair the entry via
+Modify → Change RF transmitter.
 
-- durées d'ouverture/fermeture, inclinaison, pas, commande de bascule ;
-- inversion montée/descente (moteur monté à l'envers) ;
-- inversion de l'échelle de position (ouvert = 0 %, fermé = 100 %) ;
-- méthode d'arrêt : *MY* (défaut) ou *impulsion opposée* (moteurs sans MY).
+### Supported devices
 
-À l'ajout, seules les options pertinentes pour le type et le protocole
-sont proposées.
+| HA platform | RTS devices                                                                                                                                                          |
+|---|----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `cover` | Roller shutters and shutters, venetian blinds (56 and 80 bit tilt), curtains (L/R/center opening), awnings, garage doors (1/3 buttons), gates (L/R/center, 1 button) |
+| `switch` | UNTESTED - On/Off RTS sockets (2401091, 2401093, 2401363), contact receivers                                                                                                    |
+| `light` | UNTESTED - 200 W dimmer socket (2401092), RTS light receivers (1811251, 1822215), Modulis-compatible ranges                                                          |
+| `binary_sensor` | UNTESTED - Sun/wind sensors Sunis, Eolis, Soliris (wind alarm + sun alarm)                                                                                                      |
 
-### Télécommandes physiques
+Not covered: dry contacts on GPIO relays, **io-homecontrol**
+motors, **RTW/RTV** transmission (433.92 MHz).
 
-Vous n'avez **pas besoin de connaître l'adresse** de vos télécommandes :
-dans Somfy RTS Gateway → Modifier, l'entrée *Ajouter une télécommande*
-détecte les adresses vues à l'antenne. Appuyez sur un bouton, rafraîchissez,
-sélectionnez. Les adresses liées apparaissent dans l'attribut
-`linked_remote_addresses` et peuvent aussi se saisir à la main :
+---
+
+## 📖 Usage
+
+### MY (favorite) position
+
+- `my_position` (default 50 %) is set through the wizard or the
+  `set_my_position` service.
+- The **simulated MY** setting (default) fits motors without a real MY
+  position: Home Assistant drives the shutter to `my_position`. A short
+  MY press on a physical remote triggers the same movement — the antenna
+  hears it, HA drives the shutter.
+- The **native MY** setting fits motors that memorize their own favorite:
+  a single MY frame is enough, and the *Memorize MY position* button
+  writes the current position into the motor and into HA.
+
+### Settings, editable at any time
+
+Settings → Devices & Services → **RTS Gateway** → Modify:
+
+- open/close travel times, tilt, step size, toggle command;
+- up/down inversion (motor mounted upside down);
+- position scale inversion (open = 0 %, closed = 100 %);
+- stop method: *MY* (default) or *opposite pulse* (motors without MY).
+
+When adding a device, only the options relevant to its type and protocol
+are offered, grouped into sections.
+
+### Physical remotes
+
+You do **not need to know the address** of your remotes: in
+RTS Gateway → Modify, the *Link a physical remote* entry detects the
+addresses seen over the air. Press a button, refresh, select. Linked
+addresses show up in the `linked_remote_addresses` attribute and can
+also be typed in manually:
 
 ```yaml
-service: somfy_rts.link_remote
+service: rts_gateway.link_remote
 data:
-  entity_id: cover.chambre
+  entity_id: cover.bedroom
   remote_address: "01234567"
 ```
 
-L'adresse d'une télécommande s'observe aussi dans les logs ESPHome
-(`RTS frame: address=...`) ou l'événement `somfy_rts_frame`.
+A remote's address can also be observed in the ESPHome logs
+(`RTS frame: address=...`) or in the `rts_gateway_frame` event.
 
-### Dérive de position
+### Position drift
 
-Les moteurs RTS n'ont pas de retour de position : l'estimation dérive
-lentement. `recalibrate` (ou le bouton *Recalage position*) lance un cycle
-fermeture → ouverture → retour à la position initiale, ré-ancré sur les
-butées mécaniques. À programmer de préférence en automatisation nocturne.
+RTS motors have no position feedback: the estimate drifts slowly.
+`recalibrate` (or the *Position recalibration* button) runs a
+close → open → back-to-start cycle, re-anchored on the mechanical end
+stops. Best scheduled as a nightly automation.
 
-### Capteurs soleil/vent
+### RTS groups
 
-Déclarez-les depuis le menu d'ajout : chaque capteur expose deux
-`binary_sensor` (vent, soleil) et met à jour les attributs
-`wind_alarm`/`sun_alarm` des volets liés (`link_remote` avec l'adresse
-du capteur). Si le moteur réagit seul à une alerte, recalez la position
-avec `set_position`.
+A group is created from the dedicated **"Add a shutter group"** entry
+(setup and reconfiguration menus). The wizard is minimal — name, type,
+generated address in the reserved range — then moves on to member
+selection.
 
-## Groupes RTS
+Every checked or unchecked shutter goes through the guided pairing
+sequence (Somfy procedure):
 
-Un groupe n'est pas un appareil, c'est un regroupement : il se crée depuis
-l'entrée dédiée **« Ajouter un groupe RTS »** (menu d'installation et de
-reconfiguration). Le wizard est minimal — nom, type, adresse générée dans
-la plage réservée (1 000 000 – 2 097 151) — puis enchaîne sur le choix des
-membres.
+1. The gateway holds a long PROG press: the motor does a **short
+   back-and-forth** (memory open). Confirm — or open the memory yourself
+   with a physical remote if the motor does not react.
+2. The group's PROG press is sent: the motor reacts again
+   (pairing confirmed). Confirm.
 
-Chaque volet coché ou décoché passe par la séquence guidée Somfy :
+Membership (`group_addresses` on each shutter, `members` on the group)
+is saved only after confirmation. Removing a group follows the same
+principle from **"Remove a shutter group"**: guided unpairing of each
+member (optional), then removal of the group.
 
-1. La passerelle maintient l'appui PROG long : le moteur fait un **petit
-   va-et-vient** (mémoire ouverte). Confirmez — ou ouvrez la mémoire
-   vous-même avec une télécommande physique si le moteur ne réagit pas.
-2. L'appui PROG du groupe est envoyé : le moteur réagit à nouveau
-   (appairage confirmé). Confirmez.
+Driving the group also moves the member entities: their estimate follows
+the movement (at their own speed, without extra radio), including target
+position, MY, tilt and recalibration. The group's displayed position is
+the **average** of its members.
 
-L'appartenance (`group_addresses` sur chaque volet, `members` sur le
-groupe) n'est enregistrée qu'après confirmation. La suppression d'un
-groupe suit le même principe depuis **« Supprimer un groupe RTS »** :
-désappairage guidé de chaque membre (optionnel), puis retrait du groupe.
+The `add_to_group` / `remove_from_group` services send the same
+sequence without confirmation — keep them for automations.
 
-Commander le groupe déplace aussi les entités membres : leur
-estimation suit le mouvement (à leur vitesse propre, sans radio
-supplémentaire), y compris position cible, MY, inclinaison et recalage.
+### Sun/wind sensors
 
-Les services `add_to_group` / `remove_from_group` envoient la même
-séquence sans confirmation — à réserver aux automatisations.
+Declare them from the add menu: each sensor exposes two `binary_sensor`
+entities (wind, sun) and updates the `wind_alarm`/`sun_alarm` attributes
+of linked shutters (`link_remote` with the sensor's address). If a motor
+reacts on its own to an alarm, realign its position with `set_position`.
 
-## Services
+---
 
-| Service | Usage |
+## 🛠️ Services
+
+| Service | Purpose |
 |---|---|
-| `goto_my_position` | rejoindre la position favorite |
-| `set_my_position` | enregistrer la position favorite |
-| `memorize_my_position` | MY long : le moteur mémorise sa position (MY natif) |
-| `link_remote` / `unlink_remote` | lier / détacher une télécommande physique |
-| `add_to_group` / `remove_from_group` | appairer / désappairer des volets à un groupe |
-| `enter_programming_mode` | PROG long : le moteur entre en mode programmation |
-| `send_prog` | PROG court : appaire / désappaire l'adresse de la passerelle |
-| `set_position` / `set_tilt_position` | recaler l'estimation sans bouger le moteur |
-| `recalibrate` | cycle fermeture → ouverture → retour |
-| `send_command` | commande brute RTS (UP, DOWN, MY, STOP, PROG, STEP_*) |
-| `send_step_command` | pas avec taille explicite, 1-127 (80 bits) |
+| `goto_my_position` | go to the favorite position |
+| `set_my_position` | save the favorite position |
+| `memorize_my_position` | long MY: the motor memorizes its position (native MY) |
+| `link_remote` / `unlink_remote` | link / detach a physical remote |
+| `add_to_group` / `remove_from_group` | pair / unpair shutters to a group |
+| `enter_programming_mode` | long PROG: the motor enters programming mode |
+| `send_prog` | short PROG: pairs / unpairs the gateway's address |
+| `set_position` / `set_tilt_position` | realign the estimate without moving the motor |
+| `recalibrate` | close → open → back cycle |
+| `send_command` | raw RTS command (UP, DOWN, MY, STOP, PROG, STEP_*) |
+| `send_step_command` | step with explicit size, 1-127 (80 bit) |
 
-Chaque trame décodée émet aussi un événement `somfy_rts_frame` avec
-`address`, `command`, `rolling_code`, `step`, `bits`, `device` et
-`source` (`remote` ou `gateway`) — de quoi déclencher des automatisations
-sur les boutons des télécommandes.
+Every decoded frame also fires a `rts_gateway_frame` event with
+`address`, `command`, `rolling_code`, `step`, `bits`, `device` and
+`source` (`remote` or `gateway`).
 
-## Retirer l'intégration
+---
 
-1. Paramètres → Appareils et services → Somfy RTS Gateway → les trois
-   points → **Supprimer l'entrée**.
-2. Pour que les moteurs cessent de répondre à la passerelle :
-   désappairez-les avant (`enter_programming_mode` puis `send_prog`, ou
-   bouton PROG du moteur).
-3. Retirez ensuite le dossier `custom_components/somfy_rts`.
+## 🔎 Troubleshooting
 
-## Inspirations
+- **The shutter does not respond**: check that the gateway's
+  `radio_frequency` entity is available; look at the ESPHome logs
+  (`rts_gateway`) and the integration diagnostics.
+- **The state no longer follows the physical remote**: check that RX is
+  enabled (General settings) and the address is linked; use the
+  *Link a physical remote* assistant.
+- **The position drifts**: run `recalibrate` (ideally as a nightly
+  automation) and check the open/close travel times.
+- **A command stops working after using other software**: rolling codes
+  desynchronized; re-pair the motor.
+- **Pairing fails**: the gateway must see the PROG frame in the ESPHome
+  logs; check the antenna and the CC1101 power supply.
 
-Ce projet est inspiré de :
+---
 
-- [ESPSomfy-RTS](https://github.com/rstrouse/ESPSomfy-RTS) (rstrouse)
-  — types d'ouvrants, modèle d'inclinaison, format 80 bits à molette.
-- esphome_somfy (projet communautaire ESPHome) —
-  décodage des trames RTS côté ESPHome.
-- [Somfy RTS protocol](https://pushstack.wordpress.com/somfy-rts-protocol/)
-  (pushstack) — documentation du protocole RTS.
+## 🗑️ Uninstalling
 
-## Développement
+1. Settings → Devices & Services → RTS Gateway → the three dots →
+   **Delete entry**.
+2. So the motors stop answering the gateway: unpair them first
+   (`enter_programming_mode` then `send_prog`, or the motor's PROG
+   button).
+3. Then remove the `custom_components/rts_gateway` folder.
+
+---
+
+## 🧪 Development
 
 ```bash
 python -m venv .venv
@@ -268,81 +346,78 @@ python -m venv .venv
 ```
 
 ```bash
-.venv/Scripts/python.exe -m pytest tests/ -q          # 320 tests
-.venv/Scripts/python.exe -m mypy custom_components/somfy_rts   # strict
-.venv/Scripts/python.exe -m ruff check tests custom_components/somfy_rts
+.venv/Scripts/python.exe -m pytest tests/ -q          # 324 tests
+.venv/Scripts/python.exe -m mypy custom_components/rts_gateway   # strict
+.venv/Scripts/python.exe -m ruff check tests custom_components/rts_gateway
 ```
 
-Typage strict (checklist Platinum), couverture ~99 % — configuration dans
-`mypy.ini`.
-
-Une CI GitHub Actions tourne à chaque push : tests, typage, lint,
-validation des 5 variantes ESPHome et validation HACS (voir
+Strict typing (Platinum checklist), ~99 % coverage — configuration in
+`mypy.ini`. A GitHub Actions CI runs on every push: tests, typing, lint,
+ESPHome configuration validation and HACS validation (see
 `.github/workflows/`).
 
-<details>
-<summary><h3>Architecture</h3></summary>
+### Architecture
 
 ```
-Home Assistant (integration somfy_rts)
+Home Assistant (rts_gateway integration)
    |  SomfyRTSCommand (rf-protocols) via radio_frequency.async_send_command
    v
-Entité radio_frequency.somfy_rts_radio (créée par l'intégration esphome)
-   |  API native ESPHome (radio_frequency_transmit_raw_timings)
+radio_frequency.radio_433_42_mhz entity (created by the esphome integration)
+   |  Native ESPHome API (radio_frequency_transmit_raw_timings)
    v
-ESP32 : ir_rf_proxy -> remote_transmitter -> GPIO3 == GDO0 (CC1101, TX ASK)
-                                                            ──> 433,42 MHz
-ESP32 : CC1101 (RX OOK) -> GDO2 -> remote_receiver -> composant somfy_rts
-        -> événement HA esphome.somfy_rts_rx -> mise à jour des covers
+ESP32: ir_rf_proxy -> remote_transmitter -> GPIO3 == GDO0 (CC1101, TX ASK)
+                                                            ──> 433.42 MHz
+ESP32: CC1101 (RX OOK) -> GDO2 -> remote_receiver -> rts_gateway component
+        -> HA event esphome.rts_gateway_rx -> covers update
 ```
 
-L'encodage des trames (checksum, obfuscation, Manchester, répétitions)
-est assuré par la bibliothèque `rf-protocols` de l'intégration native
-`radio_frequency`. Les codes tournants sont persistés dans le stockage
-Home Assistant (`somfy_rts.rolling_codes`) : ils survivent aux
-redémarrages — condition indispensable pour ne pas désappairer les moteurs.
+Frame encoding (checksum, obfuscation, Manchester, repeats) is handled by
+the `rf-protocols` library of the native `radio_frequency` integration.
+Rolling codes are persisted in Home Assistant storage
+(`rts_gateway.rolling_codes`): they survive restarts — an absolute
+requirement not to unpair the motors.
 
-</details>
+### Protocols and caveats
 
-<details>
-<summary><h3>Protocoles et points d'attention</h3></summary>
-
-- **RTS 56 bits** (défaut) : la grande majorité des moteurs Somfy.
-- **RTS 80 bits** : télécommandes à molette (Modulis, Situo) et leurs
-  moteurs — trame 56 bits + 3 octets d'extension non obfusqués, synchro
-  matérielle 12/14 impulsions.
-- **Inclinaison** : en 80 bits, commandes molette (Step Up/Down,
-  `tilt_step_percent` pour l'estimation, `step_size` pour la trame) ;
-  en 56 bits, moteur d'inclinaison temporisé (`tilt_time_ms`). Un
-  appui court d'une télécommande physique est lu comme
-  montée/descente, un appui long (≥ 15 répétitions) comme inclinaison.
-- N'utilisez **qu'une seule source** de commandes par adresse : les codes
-  tournants se désynchronisent sinon (remède : ré-appairer le moteur).
-- Ne réutilisez pas l'adresse d'une télécommande existante : chaque
-  émetteur RTS doit avoir une adresse unique.
-- La fréquence RTS est **433,42 MHz** : configurez le CC1101 avec
+- **56-bit RTS** (default): the vast majority of RTS motors (Somfy and
+  compatible).
+- **80-bit RTS** (untested on real hardware — see the testing status):
+  step-wheel remotes (Modulis, Situo) and their motors — 56-bit frame
+  + 3 non-obfuscated extension bytes, 12/14-pulse hardware sync.
+- **Tilt**: on 80 bit, step-wheel commands (Step Up/Down,
+  `tilt_step_percent` for the estimate, `step_size` for the frame);
+  on 56 bit, a timed tilt motor (`tilt_time_ms`). A short press of a
+  physical remote is read as up/down, a long press (≥ 15 repeats) as
+  tilt.
+- Use **only one command source** per address: rolling codes otherwise
+  desynchronize (remedy: re-pair the motor).
+- Do not reuse an existing remote's address: every RTS transmitter must
+  have a unique address.
+- The RTS frequency is **433.42 MHz**: configure the CC1101 with
   `frequency: 433.42MHz`.
 
-</details>
+---
 
-<details>
-<summary><h3>Dépannage</h3></summary>
+## 🙏 Acknowledgments
 
-- **Le volet ne répond pas** : vérifiez que l'entité `radio_frequency` de
-  la passerelle est disponible ; consultez les logs ESPHome (`somfy_rts`)
-  et les diagnostics de l'intégration.
-- **L'état ne suit plus la télécommande physique** : vérifiez que RX est
-  activé (Réglages généraux) et que l'adresse est liée ; utilisez
-  l'assistant *Ajouter une télécommande*.
-- **La position dérive** : lancez `recalibrate` (idéalement en
-  automatisation nocturne) et vérifiez les durées d'ouverture/fermeture.
-- **Une commande ne fait plus rien après usage d'un autre logiciel** :
-  codes tournants désynchronisés ; ré-appairez le moteur.
-- **Appairage impossible** : la passerelle doit voir la trame PROG dans
-  les logs ESPHome ; vérifiez l'antenne et l'alimentation du CC1101.
+This project is inspired by:
 
-</details>
+- [ESPSomfy-RTS](https://github.com/rstrouse/ESPSomfy-RTS) (rstrouse)
+  — opening types, tilt model, 80-bit step-wheel format.
+- esphome_somfy (community ESPHome project) — RTS frame decoding on the
+  ESPHome side.
+- [Somfy RTS protocol](https://pushstack.wordpress.com/somfy-rts-protocol/)
+  (pushstack) — RTS protocol documentation.
 
-## Licence
+---
 
-Distribué sous licence MIT — voir [LICENSE](LICENSE).
+## 🤝 Contributing
+
+Community project: issues, suggestions and pull requests are welcome on
+GitHub.
+
+---
+
+## 📄 License
+
+This project is released under the **MIT License** — see [LICENSE](LICENSE).

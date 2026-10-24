@@ -6,15 +6,21 @@ import asyncio
 
 import pytest
 from fakes import FakeConfigEntry, make_device
+from homeassistant.data_entry_flow import section as form_section
 from homeassistant.exceptions import HomeAssistantError
 
-from custom_components.somfy_rts import config_flow
-from custom_components.somfy_rts.config_flow import (
+from custom_components.rts_gateway import config_flow
+from custom_components.rts_gateway.config_flow import (
     SomfyRTSConfigFlow,
     SomfyRTSOptionsFlow,
 )
-from custom_components.somfy_rts.const import DOMAIN, SomfyCommand
-from custom_components.somfy_rts.rolling_code import RollingCodeStore
+from custom_components.rts_gateway.const import (
+    DEFAULT_FRAME_REPEATS,
+    DOMAIN,
+    PROG_MODE_REPEATS,
+    SomfyCommand,
+)
+from custom_components.rts_gateway.rolling_code import RollingCodeStore
 
 TRANSMITTER = "radio_frequency.test_radio"
 
@@ -34,11 +40,27 @@ DEVICE_INPUT = {
 }
 
 
+def form_defaults(schema):
+    """Schema defaults, section payloads filled in and flattened."""
+    payloads = {
+        key.schema: {}
+        for key, value in schema.schema.items()
+        if isinstance(value, form_section)
+    }
+    flat: dict = {}
+    for key, value in schema(payloads).items():
+        if isinstance(value, dict):
+            flat.update(value)
+        else:
+            flat[key] = value
+    return flat
+
+
 @pytest.fixture
 def flow(hass, fake_rf):
     flow = SomfyRTSConfigFlow()
     flow.hass = hass
-    hass.data["somfy_rts"] = {"rolling_codes": RollingCodeStore(hass)}
+    hass.data["rts_gateway"] = {"rolling_codes": RollingCodeStore(hass)}
     return flow
 
 
@@ -62,7 +84,7 @@ def test_user_step_shows_form(hass, fake_rf):
 
 def test_reconfigure_without_transmitters(hass, monkeypatch):
     """Reconfiguration sans emetteur disponible : abort."""
-    from custom_components.somfy_rts import rf as rf_module
+    from custom_components.rts_gateway import rf as rf_module
 
     monkeypatch.setattr(rf_module, "get_transmitters", lambda hass: [])
 
@@ -110,14 +132,14 @@ def test_add_device_generates_address(flow):
 def test_pair_creates_missing_store(hass, fake_rf):
     """Appairage sans store de codes : creation a la volee."""
     async def scenario():
-        hass.data.pop("somfy_rts", None)
+        hass.data.pop("rts_gateway", None)
         flow = SomfyRTSConfigFlow()
         flow.hass = hass
         flow._transmitter_id = TRANSMITTER
         flow._pending_device = complete_device_input()
 
         await flow.async_step_pair({})
-        assert "rolling_codes" in hass.data["somfy_rts"]
+        assert "rolling_codes" in hass.data["rts_gateway"]
         assert fake_rf.sent[-1]["command"] == "PROG"
 
     asyncio.run(scenario())
@@ -178,7 +200,7 @@ def test_options_add_device_generates_address(hass, fake_rf):
 
 def test_options_pair_failure_shows_error(hass, fake_rf, monkeypatch):
     """Echec radio a l'appairage (options) : erreur transmission_failed."""
-    from custom_components.somfy_rts import config_flow as cf
+    from custom_components.rts_gateway import config_flow as cf
 
     async def boom(*args, **kwargs):
         raise HomeAssistantError("RF transmission failed")
@@ -225,7 +247,7 @@ def test_remove_device_confirm_stale_index(hass, fake_rf):
 
 def test_remove_device_confirm_unpair_failure(hass, fake_rf, monkeypatch):
     """Echec radio du desappairage : erreur et rien de supprime."""
-    from custom_components.somfy_rts import config_flow as cf
+    from custom_components.rts_gateway import config_flow as cf
 
     async def boom(*args, **kwargs):
         raise HomeAssistantError("RF transmission failed")
@@ -243,10 +265,8 @@ def test_remove_device_confirm_unpair_failure(hass, fake_rf, monkeypatch):
         flow.handler = entry.entry_id
         flow._remove_index = 0
 
-        result = await flow.async_step_remove_device_confirm(
-            {"confirm": True, "unpair": True}
-        )
-        assert result["step_id"] == "remove_device_confirm"
+        result = await flow.async_step_remove_device_confirm({"unpair": True})
+        assert result["step_id"] == "remove_device_memory"
         assert result["errors"]["base"] == "transmission_failed"
         # Rien n'a ete supprime.
         assert len(flow._devices()) == 1
@@ -310,7 +330,7 @@ def test_options_add_device_rejects_invalid_address(hass, fake_rf):
 
 def test_device_options_empty_fields_pair_directly(hass, fake_rf, monkeypatch):
     """Combinaison sans champs specifiques : appairage immediat (defensif)."""
-    from custom_components.somfy_rts import config_flow as cf
+    from custom_components.rts_gateway import config_flow as cf
 
     monkeypatch.setattr(cf, "_device_option_fields", lambda device: {})
 
@@ -331,7 +351,7 @@ def test_device_options_empty_fields_pair_directly(hass, fake_rf, monkeypatch):
 
 def test_options_device_options_empty_fields_pair_directly(hass, fake_rf, monkeypatch):
     """Idem dans le flow de reconfiguration."""
-    from custom_components.somfy_rts import config_flow as cf
+    from custom_components.rts_gateway import config_flow as cf
 
     monkeypatch.setattr(cf, "_device_option_fields", lambda device: {})
 
@@ -409,7 +429,7 @@ def test_used_transmitter_not_offered_again(hass):
 
 def test_user_step_without_transmitters(hass, monkeypatch):
     async def scenario():
-        from custom_components.somfy_rts import rf
+        from custom_components.rts_gateway import rf
 
         monkeypatch.setattr(rf, "get_transmitters", lambda hass: [])
         flow = SomfyRTSConfigFlow()
@@ -434,7 +454,7 @@ def test_full_flow(hass, fake_rf, flow):
         # roller), then the pairing step.
         result = await flow.async_step_add_device(complete_device_input())
         assert result["step_id"] == "device_options"
-        assert set(result["data_schema"]({})) == {
+        assert set(form_defaults(result["data_schema"])) == {
             "invert", "invert_position", "my_position",
             "simulate_my", "stop_method",
         }
@@ -578,15 +598,15 @@ def test_options_flow(hass, fake_rf):
         result = await flow.async_step_init(None)
         assert result["type"] == "menu"
         assert result["menu_options"] == [
-            "general", "add_device", "add_group", "edit_device", "remove_device",
-            "add_remote", "remove_remote", "manage_group", "remove_group",
-            "transmitter", "done",
+            "general", "transmitter", "add_device", "edit_device", "remove_device",
+            "add_group", "manage_group", "remove_group",
+            "add_remote", "remove_remote", "done",
         ]
 
         # Reglages generaux : defaut issus de l'entree.
         result = await flow.async_step_general(None)
         assert result["step_id"] == "general"
-        assert result["data_schema"]({})["enable_rx"] is True
+        assert form_defaults(result["data_schema"])["enable_rx"] is True
         result = await flow.async_step_general({"enable_rx": False})
         assert result["type"] == "create_entry"
         assert result["data"] == {"enable_rx": False}
@@ -621,7 +641,7 @@ def test_options_edit_device(hass, fake_rf):
         assert result["step_id"] == "edit_device_params"
 
         # Champs pre-remplis, y compris les champs conditionnels 80 bits.
-        defaults = result["data_schema"]({})
+        defaults = form_defaults(result["data_schema"])
         assert defaults["name"] == "Store vénitien"
         assert defaults["open_time_ms"] == 1000
         assert defaults["tilt"] is True
@@ -629,10 +649,10 @@ def test_options_edit_device(hass, fake_rf):
         assert defaults["step_size"] == 90
 
         # Le formulaire propose les adresses liees courantes.
-        defaults = flow._edit_device_schema(flow._devices()[1])({})
+        defaults = form_defaults(flow._edit_device_schema(flow._devices()[1]))
         assert defaults["linked_remote_addresses"] == []
 
-        # Modification : retour a la liste, rien de persiste avant done.
+        # Modification : retour a la liste, persistance immediate.
         result = await flow.async_step_edit_device_params({
             "name": "Store vénitien",
             "open_time_ms": 25000,
@@ -644,9 +664,9 @@ def test_options_edit_device(hass, fake_rf):
             "linked_remote_addresses": ["00500002", "00700007"],
         })
         assert result["step_id"] == "edit_device"
-        assert not hass.config_entries.updated
+        assert len(hass.config_entries.updated) == 1  # persistance immediate
 
-        # done : persistance dans entry.data, options conservees.
+        # done : aucune ecriture supplementaire, options conservees.
         result = await flow.async_step_done(None)
         assert result["type"] == "create_entry"
         assert result["data"] == {}  # options inchangees
@@ -666,7 +686,7 @@ def test_add_device_56bit_cover_shows_only_inversions(flow):
     async def scenario():
         result = await flow.async_step_add_device(complete_device_input())
         assert result["step_id"] == "device_options"
-        assert set(result["data_schema"]({})) == {
+        assert set(form_defaults(result["data_schema"])) == {
             "invert", "invert_position", "my_position",
             "simulate_my", "stop_method",
         }
@@ -692,7 +712,7 @@ def test_add_device_80bit_cover_shows_tilt_fields(flow):
             complete_device_input(device_type="blind", protocol="rts_80bit")
         )
         assert result["step_id"] == "device_options"
-        defaults = result["data_schema"]({})
+        defaults = form_defaults(result["data_schema"])
         assert set(defaults) == {
             "invert", "invert_position", "my_position",
             "simulate_my", "stop_method",
@@ -724,7 +744,7 @@ def test_add_blind_56bit_shows_timed_tilt_fields(flow):
             complete_device_input(device_type="blind", protocol="rts_56bit")
         )
         assert result["step_id"] == "device_options"
-        defaults = result["data_schema"]({})
+        defaults = form_defaults(result["data_schema"])
         assert set(defaults) == {
             "invert", "invert_position", "my_position",
             "simulate_my", "stop_method", "tilt", "tilt_time_ms",
@@ -755,7 +775,7 @@ def test_add_roller_shutter_80bit_hides_tilt_fields(flow):
             complete_device_input(device_type="roller_shutter", protocol="rts_80bit")
         )
         assert result["step_id"] == "device_options"
-        defaults = result["data_schema"]({})
+        defaults = form_defaults(result["data_schema"])
         assert set(defaults) == {
             "invert", "invert_position", "my_position",
             "simulate_my", "stop_method", "step_size",
@@ -784,7 +804,7 @@ def test_add_garage1_hides_invert(flow):
             complete_device_input(device_type="garage1")
         )
         assert result["step_id"] == "device_options"
-        defaults = result["data_schema"]({})
+        defaults = form_defaults(result["data_schema"])
         assert set(defaults) == {
             "invert_position", "my_position",
             "simulate_my", "stop_method",
@@ -806,7 +826,7 @@ def test_add_socket_shows_only_toggle(flow):
             complete_device_input(device_type="socket")
         )
         assert result["step_id"] == "device_options"
-        defaults = result["data_schema"]({})
+        defaults = form_defaults(result["data_schema"])
         assert set(defaults) == {"toggle_command"}
 
         result = await flow.async_step_device_options({"toggle_command": "DOWN"})
@@ -824,7 +844,7 @@ def test_add_light_80bit_shows_dim_fields(flow):
             complete_device_input(device_type="light", protocol="rts_80bit")
         )
         assert result["step_id"] == "device_options"
-        defaults = result["data_schema"]({})
+        defaults = form_defaults(result["data_schema"])
         assert set(defaults) == {
             "toggle_command", "brightness_step_percent", "step_size",
         }
@@ -844,8 +864,8 @@ def test_add_light_80bit_shows_dim_fields(flow):
 # Groupes RTS (plage reservee 1 000 000 - 2 097 151)
 # =============================================================================
 def test_group_address_range_validation():
-    from custom_components.somfy_rts import address_manager
-    from custom_components.somfy_rts.const import GROUP_ADDRESS_MAX, GROUP_ADDRESS_MIN
+    from custom_components.rts_gateway import address_manager
+    from custom_components.rts_gateway.const import GROUP_ADDRESS_MAX, GROUP_ADDRESS_MIN
 
     # Une adresse de groupe doit etre dans la plage reservee.
     assert not address_manager.is_address_valid("12345678", group=True)
@@ -858,8 +878,8 @@ def test_group_address_range_validation():
 
 
 def test_generate_group_address(hass):
-    from custom_components.somfy_rts import address_manager
-    from custom_components.somfy_rts.const import GROUP_ADDRESS_MAX, GROUP_ADDRESS_MIN
+    from custom_components.rts_gateway import address_manager
+    from custom_components.rts_gateway.const import GROUP_ADDRESS_MAX, GROUP_ADDRESS_MIN
 
     address = address_manager.generate_address(hass, group=True)
     assert GROUP_ADDRESS_MIN <= int(address) <= GROUP_ADDRESS_MAX
@@ -1127,7 +1147,7 @@ def test_change_transmitter(hass, fake_rf):
 
         result = await flow.async_step_transmitter(None)
         assert result["step_id"] == "transmitter"
-        defaults = result["data_schema"]({})
+        defaults = form_defaults(result["data_schema"])
         # L'ancien émetteur n'existe plus : défaut = premier disponible.
         assert defaults["transmitter_id"] == "radio_frequency.test_radio"
 
@@ -1143,7 +1163,7 @@ def test_change_transmitter(hass, fake_rf):
 
 def test_change_transmitter_none_available(hass, monkeypatch):
     async def scenario():
-        from custom_components.somfy_rts import rf as rf_module
+        from custom_components.rts_gateway import rf as rf_module
 
         monkeypatch.setattr(rf_module, "get_transmitters", lambda hass: [])
         entry = FakeConfigEntry(
@@ -1188,7 +1208,7 @@ def test_options_add_device_full_wizard(hass, fake_rf):
         # 1. Formulaire de base (adresse generee, appareil 56 bits).
         result = await flow.async_step_add_device(complete_device_input())
         assert result["step_id"] == "device_options"
-        assert set(result["data_schema"]({})) == {
+        assert set(form_defaults(result["data_schema"])) == {
             "invert", "invert_position", "my_position",
             "simulate_my", "stop_method",
         }
@@ -1206,12 +1226,12 @@ def test_options_add_device_full_wizard(hass, fake_rf):
         assert fake_rf.sent[-1]["transmitter_id"] == TRANSMITTER
         assert result["step_id"] == "pair_result"
 
-        # 4. Confirmation -> retour au menu, rien de persiste avant done.
+        # 4. Confirmation -> retour au menu, persistance immediate.
         result = await flow.async_step_pair_result({"confirm": True})
         assert result["type"] == "menu"
-        assert not hass.config_entries.updated
+        assert len(hass.config_entries.updated) == 1
 
-        # 5. Done : l'appareil est ajoute a l'entree.
+        # 5. Done : aucune ecriture supplementaire.
         await flow.async_step_done(None)
         devices = hass.config_entries.updated[0][1]["data"]["devices"]
         assert len(devices) == 2
@@ -1265,7 +1285,7 @@ def test_options_add_group_then_members(hass, fake_rf):
         })
         # Enchainement direct sur la selection des membres.
         assert result["step_id"] == "manage_group_members"
-        assert result["data_schema"]({})["device_index"] == []
+        assert form_defaults(result["data_schema"])["device_index"] == []
 
         # On coche le volet existant : deroule interactif par volet.
         result = await flow.async_step_manage_group_members(
@@ -1279,7 +1299,7 @@ def test_options_add_group_then_members(hass, fake_rf):
         assert result["type"] == "menu"
 
         assert [(f["address"], f["repeats"]) for f in fake_rf.sent] == [
-            (10000001, 35), (1500000, 3),
+            (10000001, PROG_MODE_REPEATS), (1500000, 3),
         ]
         devices = entry.data["devices"]
         assert len(devices) == 2
@@ -1377,19 +1397,80 @@ def test_options_remove_device_with_unpair(hass, fake_rf):
         assert result["step_id"] == "remove_device_confirm"
         assert result["description_placeholders"]["address"] == "11111111"
 
-        result = await flow.async_step_remove_device_confirm(
-            {"confirm": True, "unpair": True}
-        )
+        result = await flow.async_step_remove_device_confirm({"unpair": True})
+        assert result["step_id"] == "remove_device_memory"
+        # Appui PROG long sur l'adresse du volet : ouverture memoire.
         assert fake_rf.sent[-1]["command"] == "PROG"
         assert fake_rf.sent[-1]["address"] == 11111111
         assert fake_rf.sent[-1]["transmitter_id"] == TRANSMITTER
+        assert fake_rf.sent[-1]["repeats"] == PROG_MODE_REPEATS
+
+        result = await flow.async_step_remove_device_memory({"jogged": True})
+        assert result["step_id"] == "remove_device_unpair"
+        # Appui PROG court : desappairage de l'adresse.
+        assert fake_rf.sent[-1]["command"] == "PROG"
+        assert fake_rf.sent[-1]["address"] == 11111111
+        assert fake_rf.sent[-1]["repeats"] == DEFAULT_FRAME_REPEATS
+
+        result = await flow.async_step_remove_device_unpair({"unpaired": True})
         assert result["type"] == "menu"  # retour au menu
-        assert not hass.config_entries.updated  # rien avant done
+        assert len(hass.config_entries.updated) == 1  # persistance immediate
 
         await flow.async_step_done(None)
         devices = hass.config_entries.updated[0][1]["data"]["devices"]
         assert len(devices) == 1
         assert devices[0]["address"] == "22222222"
+
+    asyncio.run(scenario())
+
+
+def test_options_remove_device_unpairs_group_addresses_first(hass, fake_rf):
+    """Membre de groupe supprime : l'adresse du groupe est desappairee
+    avant celle de l'appareil (la sienne ouvre la memoire)."""
+    async def scenario():
+        devices = [
+            make_device(name="Groupe", address="1500000", is_group=True),
+            make_device(
+                name="Volet",
+                address="10000001",
+                group_addresses=["1500000"],
+            ),
+        ]
+        entry = _make_entry(hass, devices)
+        flow = _make_options_flow(hass, entry)
+
+        await flow.async_step_remove_device({"device_index": "1"})
+        result = await flow.async_step_remove_device_confirm({"unpair": True})
+        assert result["step_id"] == "remove_device_memory"
+        # Appui long sur l'adresse du volet (canal encore appairé).
+        assert fake_rf.sent[-1]["address"] == 10000001
+        assert fake_rf.sent[-1]["repeats"] == PROG_MODE_REPEATS
+
+        result = await flow.async_step_remove_device_memory({"jogged": True})
+        assert result["step_id"] == "remove_device_unpair"
+        # PROG court sur l'adresse du groupe, pas celle du volet.
+        assert fake_rf.sent[-1]["address"] == 1500000
+        assert fake_rf.sent[-1]["repeats"] == DEFAULT_FRAME_REPEATS
+        assert result["description_placeholders"]["target"] == "Groupe"
+
+        result = await flow.async_step_remove_device_unpair({"unpaired": True})
+        assert result["step_id"] == "remove_device_memory"
+        # Sequence suivante : nouvel appui long sur le volet.
+        assert fake_rf.sent[-1]["address"] == 10000001
+        assert fake_rf.sent[-1]["repeats"] == PROG_MODE_REPEATS
+
+        result = await flow.async_step_remove_device_memory({"jogged": True})
+        assert result["step_id"] == "remove_device_unpair"
+        # PROG court sur l'adresse du volet, la derniere de la file.
+        assert fake_rf.sent[-1]["address"] == 10000001
+        assert fake_rf.sent[-1]["repeats"] == DEFAULT_FRAME_REPEATS
+        assert result["description_placeholders"]["target"] == "Volet"
+
+        result = await flow.async_step_remove_device_unpair({"unpaired": True})
+        assert result["type"] == "menu"
+        assert len(hass.config_entries.updated) == 1
+        remaining = hass.config_entries.updated[0][1]["data"]["devices"]
+        assert [d["address"] for d in remaining] == ["1500000"]
 
     asyncio.run(scenario())
 
@@ -1408,9 +1489,7 @@ def test_options_remove_device_without_unpair(hass, fake_rf):
         flow.handler = entry.entry_id
 
         await flow.async_step_remove_device({"device_index": "0"})
-        result = await flow.async_step_remove_device_confirm(
-            {"confirm": True, "unpair": False}
-        )
+        result = await flow.async_step_remove_device_confirm({"unpair": False})
         assert result["type"] == "menu"
         assert fake_rf.sent == []
 
@@ -1420,8 +1499,8 @@ def test_options_remove_device_without_unpair(hass, fake_rf):
     asyncio.run(scenario())
 
 
-def test_options_remove_device_requires_confirm(hass, fake_rf):
-    """Sans confirmation : retour au choix de l'appareil."""
+def test_options_remove_device_confirm_form(hass, fake_rf):
+    """Le formulaire ne propose que le desappairage guide, coche par defaut."""
     async def scenario():
         entry = FakeConfigEntry(
             data={"transmitter_id": TRANSMITTER, "enable_rx": True,
@@ -1434,11 +1513,39 @@ def test_options_remove_device_requires_confirm(hass, fake_rf):
         flow.handler = entry.entry_id
 
         await flow.async_step_remove_device({"device_index": "0"})
-        result = await flow.async_step_remove_device_confirm(
-            {"confirm": False}
-        )
-        assert result["step_id"] == "remove_device"
+        result = await flow.async_step_remove_device_confirm(None)
+        assert result["step_id"] == "remove_device_confirm"
+        fields = {m.schema for m in result["data_schema"].schema}
+        assert fields == {"unpair"}
+        assert result["data_schema"]({}) == {"unpair": True}
         assert fake_rf.sent == []
+
+    asyncio.run(scenario())
+
+
+def test_options_remove_device_memory_forms(hass, fake_rf):
+    """Les etapes guidees affichent une case a cocher, sinon
+    la soumission est vide et l'etape boucle sur son erreur."""
+    async def scenario():
+        entry = FakeConfigEntry(
+            data={"transmitter_id": TRANSMITTER, "enable_rx": True,
+                  "devices": [make_device()], "sensors": []}
+        )
+        hass.config_entries.entries.append(entry)
+
+        flow = SomfyRTSOptionsFlow()
+        flow.hass = hass
+        flow.handler = entry.entry_id
+
+        await flow.async_step_remove_device({"device_index": "0"})
+        await flow.async_step_remove_device_confirm({"unpair": True})
+        result = await flow.async_step_remove_device_memory(None)
+        assert result["step_id"] == "remove_device_memory"
+        assert {m.schema for m in result["data_schema"].schema} == {"jogged"}
+
+        result = await flow.async_step_remove_device_memory({"jogged": True})
+        assert result["step_id"] == "remove_device_unpair"
+        assert {m.schema for m in result["data_schema"].schema} == {"unpaired"}
 
     asyncio.run(scenario())
 
@@ -1550,7 +1657,7 @@ def test_options_manage_group_selects_group(hass, fake_rf):
         result = await flow.async_step_manage_group({"device_index": "1"})
         assert result["step_id"] == "manage_group_members"
         # Aucun membre courant par defaut.
-        assert result["data_schema"]({})["device_index"] == []
+        assert form_defaults(result["data_schema"])["device_index"] == []
 
     asyncio.run(scenario())
 
@@ -1597,21 +1704,21 @@ def test_options_manage_group_members_toggle(hass, fake_rf):
         # File d'attente : ajout de Volet 2 puis retrait de Volet 1.
         assert result["step_id"] == "member_memory"
         assert [(f["address"], f["repeats"]) for f in fake_rf.sent] == [
-            (10000002, 35),
+            (10000002, PROG_MODE_REPEATS),
         ]
 
         # Premier mouvement confirme : appui PROG du groupe.
         result = await flow.async_step_member_memory({"jogged": True})
         assert result["step_id"] == "member_pair_confirm"
         assert [(f["address"], f["repeats"]) for f in fake_rf.sent] == [
-            (10000002, 35), (1500000, 3),
+            (10000002, PROG_MODE_REPEATS), (1500000, 3),
         ]
 
         # Second mouvement confirme : volet suivant.
         result = await flow.async_step_member_pair_confirm({"paired": True})
         assert result["step_id"] == "member_memory"
         assert [(f["address"], f["repeats"]) for f in fake_rf.sent][-1] == (
-            10000001, 35,
+            10000001, PROG_MODE_REPEATS,
         )
 
         result = await flow.async_step_member_memory({"jogged": True})
@@ -1632,7 +1739,7 @@ def test_options_manage_group_members_toggle(hass, fake_rf):
 def test_options_manage_group_transmission_failure(hass, fake_rf, monkeypatch):
     """Echec radio : erreur traduite, aucune modification persistee."""
     async def scenario():
-        from custom_components.somfy_rts import rf
+        from custom_components.rts_gateway import rf
 
         async def boom(*args, **kwargs):
             raise HomeAssistantError("transmitter gone")
@@ -1722,7 +1829,7 @@ def test_init_manage_group_members(hass, fake_rf):
 
         result = await flow.async_step_manage_group({"device_index": "0"})
         assert result["step_id"] == "manage_group_members"
-        assert result["data_schema"]({})["device_index"] == []
+        assert form_defaults(result["data_schema"])["device_index"] == []
 
         # Ajout du volet : deroule interactif avec mouvements confirmes.
         result = await flow.async_step_manage_group_members(
@@ -1730,13 +1837,13 @@ def test_init_manage_group_members(hass, fake_rf):
         )
         assert result["step_id"] == "member_memory"
         assert [(f["address"], f["repeats"]) for f in fake_rf.sent] == [
-            (10000001, 35),
+            (10000001, PROG_MODE_REPEATS),
         ]
 
         result = await flow.async_step_member_memory({"jogged": True})
         assert result["step_id"] == "member_pair_confirm"
         assert [(f["address"], f["repeats"]) for f in fake_rf.sent] == [
-            (10000001, 35), (1500000, 3),
+            (10000001, PROG_MODE_REPEATS), (1500000, 3),
         ]
 
         result = await flow.async_step_member_pair_confirm({"paired": True})
@@ -1756,7 +1863,7 @@ def test_init_manage_group_members(hass, fake_rf):
 def test_init_manage_group_transmission_failure(hass, fake_rf, monkeypatch):
     """Echec radio : erreur traduite, appartenance inchangee."""
     async def scenario():
-        from custom_components.somfy_rts import rf
+        from custom_components.rts_gateway import rf
 
         async def boom(*args, **kwargs):
             raise HomeAssistantError("transmitter gone")
@@ -1798,7 +1905,7 @@ def test_options_member_memory_retry(hass, fake_rf):
         assert result["step_id"] == "member_memory"
         assert result["errors"] == {"base": "memory_not_opened"}
         assert len(fake_rf.sent) == 2  # nouvel appui long
-        assert fake_rf.sent[-1]["repeats"] == 35
+        assert fake_rf.sent[-1]["repeats"] == PROG_MODE_REPEATS
         # Aucune modification persistee.
         assert entry.data["devices"][1].get("group_addresses", []) == []
 
@@ -1825,6 +1932,39 @@ def test_options_member_pair_retry(hass, fake_rf):
         assert fake_rf.sent[-1]["address"] == 1500000
 
     asyncio.run(scenario())
+
+def test_options_manage_group_members_persisted_per_member(hass, fake_rf):
+    """Wizard abandonne en cours de file : les appartenances deja
+    confirmees sont enregistrees, pas re-appairees au retour."""
+    async def scenario():
+        devices = [
+            make_device(name="Groupe", address="1500000", is_group=True),
+            make_device(name="Volet 1", address="10000001"),
+            make_device(name="Volet 2", address="10000002"),
+        ]
+        entry = _make_entry(hass, devices)
+        flow = _make_options_flow(hass, entry)
+
+        await flow.async_step_manage_group({"device_index": "0"})
+        await flow.async_step_manage_group_members({"device_index": ["1", "2"]})
+        await flow.async_step_member_memory({"jogged": True})
+        await flow.async_step_member_pair_confirm({"paired": True})
+        # Abandon ici : le premier membre est confirme, le second attend.
+        assert entry.data["devices"][1]["group_addresses"] == ["1500000"]
+        assert entry.data["devices"][2].get("group_addresses", []) == []
+
+        # Retour dans le wizard : le membre confirme n'est pas remis
+        # en file, seul le second volet reste a apparier.
+        flow2 = _make_options_flow(hass, entry)
+        await flow2.async_step_manage_group({"device_index": "0"})
+        result = await flow2.async_step_manage_group_members(
+            {"device_index": ["1", "2"]}
+        )
+        assert result["step_id"] == "member_memory"
+        assert flow2._member_queue == [(2, True)]
+
+    asyncio.run(scenario())
+
 
 def test_options_manage_group_no_changes(hass, fake_rf):
     """Aucune modification cochee : retour au menu, aucune trame."""
@@ -1949,7 +2089,7 @@ def test_options_remove_group_unpairs_members_then_deletes(hass, fake_rf):
         # Sequence guidee du membre : memoire ouverte puis PROG du groupe.
         assert result["step_id"] == "member_memory"
         assert [(f["address"], f["repeats"]) for f in fake_rf.sent] == [
-            (10000001, 35),
+            (10000001, PROG_MODE_REPEATS),
         ]
         result = await flow.async_step_member_memory({"jogged": True})
         assert result["step_id"] == "member_pair_confirm"
@@ -1962,7 +2102,7 @@ def test_options_remove_group_unpairs_members_then_deletes(hass, fake_rf):
         assert devices[0]["address"] == "10000001"
         assert devices[0].get("group_addresses", []) == []
         assert [(f["address"], f["repeats"]) for f in fake_rf.sent] == [
-            (10000001, 35), (1500000, 3),
+            (10000001, PROG_MODE_REPEATS), (1500000, 3),
         ]
 
     asyncio.run(scenario())
@@ -1973,7 +2113,7 @@ def test_options_remove_group_unpairs_members_then_deletes(hass, fake_rf):
 # =============================================================================
 def test_device_type_labels_english_fallback(hass):
     """Sans config de langue (tests), les libelles sont en anglais."""
-    from custom_components.somfy_rts.config_flow import device_type_options
+    from custom_components.rts_gateway.config_flow import device_type_options
 
     options = device_type_options(hass)
     labels = {option["label"] for option in options}
@@ -1987,11 +2127,11 @@ def test_device_type_labels_french(hass):
     """En francais, les libelles du wizard sont traduits."""
     from types import SimpleNamespace
 
-    from custom_components.somfy_rts.config_flow import (
+    from custom_components.rts_gateway.config_flow import (
         device_type_options,
         step_add_group_schema,
     )
-    from custom_components.somfy_rts.const import COVER_DEVICE_TYPES
+    from custom_components.rts_gateway.const import COVER_DEVICE_TYPES
 
     hass.config = SimpleNamespace(language="fr")
     options = device_type_options(hass)

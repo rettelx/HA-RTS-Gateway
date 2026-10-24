@@ -14,8 +14,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
-from custom_components.somfy_rts.const import SomfyCommand
-from custom_components.somfy_rts.protocols import (
+from custom_components.rts_gateway.const import SomfyCommand
+from custom_components.rts_gateway.protocols import (
     build_80bit_timings,
     build_command,
     decode_timings,

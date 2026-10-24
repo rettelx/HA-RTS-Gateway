@@ -1,0 +1,204 @@
+link_remote:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: rts_gateway
+    remote_address:
+      required: true
+      selector:
+        text:
+
+unlink_remote:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: rts_gateway
+    remote_address:
+      required: true
+      selector:
+        text:
+
+set_my_position:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: rts_gateway
+          domain: cover
+    position:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+
+enter_programming_mode:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: rts_gateway
+
+send_prog:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: rts_gateway
+
+memorize_my_position:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: rts_gateway
+          domain: cover
+
+recalibrate:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: rts_gateway
+          domain: cover
+
+goto_my_position:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: rts_gateway
+          domain: cover
+
+set_position:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: rts_gateway
+          domain: cover
+    position:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+
+set_tilt_position:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: rts_gateway
+          domain: cover
+    tilt_position:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 100
+          unit_of_measurement: "%"
+
+send_command:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: rts_gateway
+          domain: cover
+    command:
+      required: true
+      selector:
+        select:
+          options:
+            - "UP"
+            - "DOWN"
+            - "MY"
+            - "STOP"
+            - "PROG"
+            - "STEP_UP"
+            - "STEP_DOWN"
+          mode: dropdown
+    repeat:
+      required: false
+      default: 3
+      selector:
+        number:
+          min: 0
+          max: 50
+
+send_step_command:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: rts_gateway
+          domain: cover
+    direction:
+      required: true
+      selector:
+        select:
+          options:
+            - "up"
+            - "down"
+          mode: dropdown
+    step_size:
+      required: true
+      default: 100
+      selector:
+        number:
+          min: 1
+          max: 127
+    repeat:
+      required: false
+      default: 3
+      selector:
+        number:
+          min: 0
+          max: 50
+add_to_group:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: rts_gateway
+          domain: cover
+          multiple: true
+    group:
+      required: true
+      selector:
+        entity:
+          integration: rts_gateway
+          domain: cover
+remove_from_group:
+  fields:
+    entity_id:
+      required: true
+      selector:
+        entity:
+          integration: rts_gateway
+          domain: cover
+          multiple: true
+    group:
+      required: true
+      selector:
+        entity:
+          integration: rts_gateway
+          domain: cover

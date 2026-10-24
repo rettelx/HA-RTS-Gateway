@@ -1,5 +1,5 @@
 // Host-side unit tests for the real Somfy RTS decoder
-// (esphome_components/somfy_rts/somfy_rts.cpp) using stub ESPHome
+// (esphome_components/rts_gateway/rts_gateway.cpp) using stub ESPHome
 // headers and vectors generated from the Python twin.
 
 #include <cstdint>
@@ -7,11 +7,11 @@
 #include <tuple>
 #include <vector>
 
-#include "somfy_rts.h"
+#include "rts_gateway.h"
 #include "vectors.hpp"
 
 using esphome::remote_base::RemoteReceiveData;
-using esphome::somfy_rts::SomfyRTSComponent;
+using esphome::rts_gateway::RTSGatewayComponent;
 
 static int failures = 0;
 
@@ -26,7 +26,7 @@ int main() {
   // 1. Every vector must trigger exactly once with the expected fields.
   for (const auto &v : TEST_VECTORS) {
     esphome::test_millis() += 2000;  // outside the duplicate window
-    SomfyRTSComponent comp;
+    RTSGatewayComponent comp;
     comp.on_receive(RemoteReceiveData(v.timings));
     const auto &calls = comp.get_command_trigger()->calls_;
     check(calls.size() == 1, "expected exactly one trigger", v.name);
@@ -45,7 +45,7 @@ int main() {
   {
     const auto &v = TEST_VECTORS[0];
     esphome::test_millis() += 2000;
-    SomfyRTSComponent comp;
+    RTSGatewayComponent comp;
     comp.on_receive(RemoteReceiveData(v.timings));
     comp.on_receive(RemoteReceiveData(v.timings));
     check(comp.get_command_trigger()->calls_.size() == 1,
@@ -61,7 +61,7 @@ int main() {
     std::vector<int32_t> bad = TEST_VECTORS[0].timings;
     bad[bad.size() / 2] = -bad[bad.size() / 2];
     esphome::test_millis() += 2000;
-    SomfyRTSComponent comp;
+    RTSGatewayComponent comp;
     comp.on_receive(RemoteReceiveData(bad));
     check(comp.get_command_trigger()->calls_.empty(),
           "corrupted frame fired", "corrupted");

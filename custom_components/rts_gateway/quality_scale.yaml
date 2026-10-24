@@ -1,0 +1,69 @@
+# Home Assistant quality scale checklist.
+
+## Bronze
+
+- [x] `action-setup`: Register actions in async_setup — [services.py](custom_components/rts_gateway/services.py)
+- [x] `appropriate-polling`: Poll at an appropriate interval — [cover.py](custom_components/rts_gateway/cover.py)
+- [ ] `brands`: Provide brand assets — [home-assistant/brands](https://github.com/home-assistant/brands)
+- [x] `common-modules`: Put common patterns in common modules — [availability.py](custom_components/rts_gateway/availability.py), [rf.py](custom_components/rts_gateway/rf.py)
+- [x] `config-flow`: Set up from the UI with a config flow — [config_flow.py](custom_components/rts_gateway/config_flow.py)
+  - [x] Uses `data_description` to give context to fields — [strings.json](custom_components/rts_gateway/strings.json)
+  - [x] Uses `ConfigEntry.data` and `ConfigEntry.options` correctly — [config_flow.py](custom_components/rts_gateway/config_flow.py)
+- [x] `config-flow-test-coverage`: Test the config flow fully — [test_config_flow.py](tests/test_config_flow.py)
+- [x] `dependency-transparency`: Use transparent dependencies — [manifest.json](custom_components/rts_gateway/manifest.json)
+- [x] `docs-actions`: Document the actions — [README.md](README.md)
+- [x] `docs-conditions`: Document the conditions — exempt, no conditions — [services.yaml](custom_components/rts_gateway/services.yaml)
+- [x] `docs-high-level-description`: Describe the brand, product, or service — [README.md](README.md)
+- [x] `docs-installation-instructions`: Document the installation — [README.md](README.md)
+- [x] `docs-removal-instructions`: Document how to remove the integration — [README.md](README.md)
+- [x] `docs-triggers`: Document the triggers — [README.md](README.md), [rx_handler.py](custom_components/rts_gateway/rx_handler.py)
+- [x] `entity-event-setup`: Subscribe to events in the entity lifecycle — [cover.py](custom_components/rts_gateway/cover.py), [availability.py](custom_components/rts_gateway/availability.py)
+- [x] `entity-unique-id`: Give entities a unique ID — [cover.py](custom_components/rts_gateway/cover.py)
+- [x] `has-entity-name`: Use has_entity_name — [cover.py](custom_components/rts_gateway/cover.py)
+- [x] `runtime-data`: Store runtime data in runtime_data — [__init__.py](custom_components/rts_gateway/__init__.py)
+- [x] `test-before-configure`: Test the connection in the config flow — [config_flow.py](custom_components/rts_gateway/config_flow.py)
+- [x] `test-before-setup`: Check the connection during setup — [__init__.py](custom_components/rts_gateway/__init__.py)
+- [x] `unique-config-entry`: Prevent duplicate config entries — [config_flow.py](custom_components/rts_gateway/config_flow.py)
+
+## Silver
+
+- [x] `action-exceptions`: Raise exceptions when actions fail — [services.py](custom_components/rts_gateway/services.py)
+- [x] `config-entry-unloading`: Support unloading the config entry — [__init__.py](custom_components/rts_gateway/__init__.py)
+- [x] `docs-configuration-parameters`: Document the options — [README.md](README.md)
+- [x] `docs-installation-parameters`: Document the setup parameters — [README.md](README.md)
+- [x] `entity-unavailable`: Mark entities unavailable when appropriate — [availability.py](custom_components/rts_gateway/availability.py)
+- [x] `integration-owner`: Have an integration owner — [manifest.json](custom_components/rts_gateway/manifest.json)
+- [x] `log-when-unavailable`: Log once when unavailable, and once when back — [availability.py](custom_components/rts_gateway/availability.py)
+- [x] `parallel-updates`: Set the number of parallel updates — [cover.py](custom_components/rts_gateway/cover.py)
+- [x] `reauthentication-flow`: Reauthenticate from the UI — exempt, local RF gateway without authentication — [manifest.json](custom_components/rts_gateway/manifest.json)
+- [x] `test-coverage`: Test more than 95% of the code — [tests/](tests/)
+
+## Gold
+
+- [x] `devices`: Create devices — [cover.py](custom_components/rts_gateway/cover.py)
+- [x] `diagnostics`: Implement diagnostics — [diagnostics.py](custom_components/rts_gateway/diagnostics.py)
+- [x] `discovery`: Support discovery — exempt, the gateway is discovered by the esphome integration — [config_flow.py](custom_components/rts_gateway/config_flow.py)
+- [x] `discovery-update-info`: Update network information from discovery — exempt, a renamed transmitter is repaired by the reconfigure flow — [config_flow.py](custom_components/rts_gateway/config_flow.py)
+- [x] `docs-data-update`: Document how data is updated — [README.md](README.md)
+- [x] `docs-examples`: Document automation examples — [README.md](README.md)
+- [x] `docs-known-limitations`: Document known limitations — [README.md](README.md)
+- [x] `docs-supported-devices`: Document supported devices — [README.md](README.md)
+- [x] `docs-supported-functions`: Document supported functionality — [README.md](README.md)
+- [x] `docs-troubleshooting`: Document troubleshooting — [README.md](README.md)
+- [x] `docs-use-cases`: Document use cases — [README.md](README.md)
+- [x] `dynamic-devices`: Add new devices automatically — [__init__.py](custom_components/rts_gateway/__init__.py)
+- [x] `entity-category`: Assign entity categories — [binary_sensor.py](custom_components/rts_gateway/binary_sensor.py)
+- [x] `entity-device-class`: Use device classes — [const.py](custom_components/rts_gateway/const.py)
+- [x] `entity-disabled-by-default`: Disable noisy or less popular entities — [cover.py](custom_components/rts_gateway/cover.py)
+- [x] `entity-translations`: Translate entity names — [strings.json](custom_components/rts_gateway/strings.json)
+- [x] `exception-translations`: Translate exception messages — [strings.json](custom_components/rts_gateway/strings.json)
+- [x] `icon-translations`: Use icon translations — [strings.json](custom_components/rts_gateway/strings.json)
+- [x] `reconfiguration-flow`: Reconfigure from the UI — [config_flow.py](custom_components/rts_gateway/config_flow.py)
+- [ ] `repair-issues`: Raise repair issues when the user needs to act — [config_flow.py](custom_components/rts_gateway/config_flow.py)
+- [x] `stale-devices`: Remove stale devices — [__init__.py](custom_components/rts_gateway/__init__.py)
+
+## Platinum
+
+- [x] `async-dependency`: Use an async dependency — [rf.py](custom_components/rts_gateway/rf.py)
+- [x] `inject-websession`: Pass in the web session — exempt, no HTTP session, local RF only — [rf.py](custom_components/rts_gateway/rf.py)
+- [x] `strict-typing`: Use strict typing — [mypy.ini](mypy.ini)

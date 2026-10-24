@@ -7,9 +7,13 @@ import asyncio
 import pytest
 from homeassistant.exceptions import HomeAssistantError
 
-from custom_components.somfy_rts import rf
-from custom_components.somfy_rts.const import SomfyCommand, SomfyProtocol
-from custom_components.somfy_rts.protocols import decode_timings
+from custom_components.rts_gateway import rf
+from custom_components.rts_gateway.const import (
+    PROG_MODE_REPEATS,
+    SomfyCommand,
+    SomfyProtocol,
+)
+from custom_components.rts_gateway.protocols import decode_timings
 
 TRANSMITTER = "radio_frequency.test_radio"
 
@@ -131,3 +135,26 @@ def test_step_size_is_limited_to_7_bits(hass, native_rf):
     asyncio.run(send(127))  # ok
     with pytest.raises(ValueError):
         asyncio.run(send(128))
+
+
+# Captured before the autouse no_press_hold fixture patches it.
+_PRESS_AIR_TIME_S = rf.press_air_time_s
+
+
+def test_press_air_time_s():
+    """Duree sur les airs : timings bruts x nombre de passes."""
+    assert round(
+        _PRESS_AIR_TIME_S(
+            SomfyCommand.PROG, SomfyProtocol.RTS_56BIT, PROG_MODE_REPEATS
+        ),
+        3,
+    ) == 5.357
+    assert round(
+        _PRESS_AIR_TIME_S(
+            SomfyCommand.PROG, SomfyProtocol.RTS_80BIT, PROG_MODE_REPEATS
+        ),
+        3,
+    ) == 3.595
+    assert round(
+        _PRESS_AIR_TIME_S(SomfyCommand.PROG, SomfyProtocol.RTS_56BIT, 3), 3
+    ) == 1.246

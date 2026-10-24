@@ -13,10 +13,10 @@ from fakes import FakeConfigEntry, make_device, prepare_entity
 from homeassistant.components.cover import CoverDeviceClass, CoverEntityFeature
 from homeassistant.exceptions import HomeAssistantError
 
-from custom_components.somfy_rts import cover as cover_module
-from custom_components.somfy_rts.const import SomfyCommand
-from custom_components.somfy_rts.cover import PositionEstimator, SomfyRTSCover
-from custom_components.somfy_rts.rolling_code import RollingCodeStore
+from custom_components.rts_gateway import cover as cover_module
+from custom_components.rts_gateway.const import SomfyCommand
+from custom_components.rts_gateway.cover import PositionEstimator, SomfyRTSCover
+from custom_components.rts_gateway.rolling_code import RollingCodeStore
 
 STEP_INTERVAL = 0.01
 
@@ -34,7 +34,7 @@ def build_cover(hass, **device_overrides):
         },
         runtime_data=make_runtime_data(),
     )
-    hass.data.setdefault("somfy_rts", {})["rolling_codes"] = RollingCodeStore(hass)
+    hass.data.setdefault("rts_gateway", {})["rolling_codes"] = RollingCodeStore(hass)
     entity = SomfyRTSCover(hass, entry, device)
     prepare_entity(entity, "cover.test")
     return entity
@@ -903,7 +903,7 @@ def test_send_raw_command_with_step_size(hass, fake_rf):
 
 def test_send_raw_step_requires_80bit(hass, monkeypatch):
     async def scenario():
-        from custom_components.somfy_rts import rf
+        from custom_components.rts_gateway import rf
 
         async def fake_native(hass, transmitter_id, command):
             pass
@@ -927,9 +927,9 @@ def test_setup_entry_filters_cover_types(hass):
     from conftest import make_runtime_data
     from fakes import FakeConfigEntry
 
-    from custom_components.somfy_rts import cover as cover_module
+    from custom_components.rts_gateway import cover as cover_module
 
-    hass.data.setdefault("somfy_rts", {})["rolling_codes"] = RollingCodeStore(hass)
+    hass.data.setdefault("rts_gateway", {})["rolling_codes"] = RollingCodeStore(hass)
     entry = FakeConfigEntry(
         data={
             "devices": [
@@ -1271,7 +1271,7 @@ def build_group_with_members(hass, **group_overrides):
         },
         runtime_data=make_runtime_data(),
     )
-    hass.data.setdefault("somfy_rts", {})["rolling_codes"] = RollingCodeStore(hass)
+    hass.data.setdefault("rts_gateway", {})["rolling_codes"] = RollingCodeStore(hass)
     group = SomfyRTSCover(
         hass,
         entry,
@@ -1461,3 +1461,38 @@ def test_device_model_localized(hass, fake_rf):
     hass.config = SimpleNamespace(language="fr")
     entity_fr = build_cover(hass)
     assert entity_fr._attr_device_info["model"] == "Volet roulant"
+
+def test_group_position_averages_members(hass, fake_rf, no_timer, monkeypatch):
+    """Un membre bouge seul : la position du groupe suit la moyenne."""
+    async def scenario():
+        base = 4096.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        group, members = build_group_with_members(hass)
+
+        # Tous les volets sont fermes, le groupe aussi.
+        group.async_set_current_position(0)
+        assert group.current_cover_position == 0
+        assert group.is_closed
+
+        # Un seul volet s'ouvre totalement : le groupe passe a 50 %.
+        group.async_write_ha_state.reset_mock()
+        await members[0].async_set_cover_position(position=100)
+        monkeypatch.setattr(time, "monotonic", lambda: base + 2.0)
+        await members[0]._async_movement_tick(None)
+        assert members[0].current_cover_position == 100
+        assert group.current_cover_position == 50
+        assert group.is_closed is False
+        # L'etat du groupe a bien ete rafraichi.
+        assert group.async_write_ha_state.called
+
+        # Fermer le groupe ne doit pas etre avale par l'egalite des
+        # cibles (l'estimateur du groupe est deja a 0).
+        frames = len(fake_rf.sent)
+        await group.async_set_cover_position(position=0)
+        assert len(fake_rf.sent) == frames + 1
+        monkeypatch.setattr(time, "monotonic", lambda: base + 4.0)
+        await group._async_movement_tick(None)
+        assert group.current_cover_position == 0
+        assert group.is_closed
+
+    asyncio.run(scenario())

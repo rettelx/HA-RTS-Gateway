@@ -1,4 +1,4 @@
-"""Tests for the Somfy RTS protocol module.
+"""Tests for the RTS protocol module.
 
 Validates the timing decoder against the native rf-protocols encoder
 (the library shipped with the radio_frequency integration), which is
@@ -14,8 +14,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from custom_components.somfy_rts.const import SomfyCommand
-from custom_components.somfy_rts.protocols import (
+from custom_components.rts_gateway.const import SomfyCommand
+from custom_components.rts_gateway.protocols import (
     BUTTON_DOWN,
     BUTTON_MY,
     BUTTON_PROG,
@@ -179,7 +179,7 @@ def test_80bit_step_commands_round_trip():
 def test_80bit_stop_extension_decodes_as_stop():
     """80-bit STOP frames (My + byte 8 low nibble 0xF) must map to STOP."""
     # Encode a MY command with a manually forged Stop extension
-    from custom_components.somfy_rts.protocols.somfy_rts import (
+    from custom_components.rts_gateway.protocols.rts import (
         HW_SYNC_FIRST_80BIT,
         _build_80bit_frame,
     )
@@ -187,7 +187,7 @@ def test_80bit_stop_extension_decodes_as_stop():
     # Forge the Stop extension: b8=47 (0x2F), recompute cs80
     frame[8] = 47
     frame[9] = 0xF0 | 0x00
-    from custom_components.somfy_rts.protocols.somfy_rts import _checksum80
+    from custom_components.rts_gateway.protocols.rts import _checksum80
     frame[9] = 0xF0 | _checksum80(frame[7], frame[8], frame[9])
     # Rebuild timings manually around this frame
     timings = [9415, -89565]
@@ -208,7 +208,7 @@ def test_80bit_stop_extension_decodes_as_stop():
 
 def test_80bit_repeat_frames_have_incrementing_b7():
     """Each repeated frame must bump the extension counter (byte 7)."""
-    from custom_components.somfy_rts.protocols.somfy_rts import (
+    from custom_components.rts_gateway.protocols.rts import (
         _build_80bit_frame,
     )
     frames = [
@@ -222,7 +222,7 @@ def test_80bit_repeat_frames_have_incrementing_b7():
 
 def test_80bit_frame_checks_both_checksums():
     """A corrupted 80-bit frame must be rejected by the checksums."""
-    from custom_components.somfy_rts.protocols.somfy_rts import (
+    from custom_components.rts_gateway.protocols.rts import (
         _build_80bit_frame,
     )
 
@@ -247,7 +247,7 @@ def test_80bit_frame_checks_both_checksums():
 
 def test_real_molette_style_frame_decodes():
     """Real step-wheel remotes send 6 hw pulses (12 runs): must decode."""
-    from custom_components.somfy_rts.protocols.somfy_rts import (
+    from custom_components.rts_gateway.protocols.rts import (
         _build_80bit_frame,
     )
     frame = _build_80bit_frame(0x999999, SomfyCommand.DOWN, 123, 0, 0)
@@ -288,7 +288,7 @@ def test_56bit_still_decodes_after_80bit_support():
 
 def test_sensor_frame_decodes():
     """Sensor frames (ctrl 0xE) must map to the SENSOR command."""
-    from custom_components.somfy_rts.protocols.somfy_rts import (
+    from custom_components.rts_gateway.protocols.rts import (
         BUTTON_SENSOR,
         _build_frame_from_bytes,
     )
@@ -436,7 +436,7 @@ def test_extension_byte7_wraps_on_high_repeats():
 
 def test_decode_rejects_short_hw_sync():
     """Synchro materielle trop courte : trame ignoree."""
-    from custom_components.somfy_rts.protocols.somfy_rts import (
+    from custom_components.rts_gateway.protocols.rts import (
         HALF_BIT_US,
         SW_SYNC_MARK_US,
         SW_SYNC_SPACE_US,

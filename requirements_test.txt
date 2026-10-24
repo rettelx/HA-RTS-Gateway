@@ -1,4 +1,4 @@
-# Development / test dependencies of the somfy_rts integration.
+# Development / test dependencies of the rts_gateway integration.
 # Install with: pip install -r requirements_test.txt
 # Pinned to the Home Assistant version the integration targets:
 # probatio (its validation library) only ships from 2026.10.

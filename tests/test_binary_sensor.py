@@ -7,8 +7,8 @@ import asyncio
 from conftest import make_runtime_data
 from fakes import FakeConfigEntry, make_sensor_config, prepare_entity
 
-from custom_components.somfy_rts import binary_sensor
-from custom_components.somfy_rts.binary_sensor import (
+from custom_components.rts_gateway import binary_sensor
+from custom_components.rts_gateway.binary_sensor import (
     KIND_SUN,
     KIND_WIND,
     SomfyRTSSensor,
@@ -17,7 +17,7 @@ from custom_components.somfy_rts.binary_sensor import (
 
 
 def build_sensor(hass, kind=KIND_WIND):
-    hass.data.setdefault("somfy_rts", {})
+    hass.data.setdefault("rts_gateway", {})
     entry = FakeConfigEntry(
         data={"devices": [], "sensors": [make_sensor_config()]},
         runtime_data=make_runtime_data(),

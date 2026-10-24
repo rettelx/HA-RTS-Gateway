@@ -1,7 +1,7 @@
 """Compile and run the C++ decoder test harness.
 
 The harness (tests/cpp/test_decoder.cpp) runs the REAL decoder from
-esphome_components/somfy_rts against vectors generated from the Python
+esphome_components/rts_gateway against vectors generated from the Python
 twin (tests/cpp/generate_vectors.py), including captures of real Somfy
 remotes. Requires the ``ziglang`` package as a host C++ compiler.
 """
@@ -47,9 +47,9 @@ def test_cpp_decoder(tmp_path):
         sys.executable, "-m", "ziglang", "c++",
         "-std=c++17", "-w",
         "-I", str(TESTS_CPP / "stubs"),
-        "-I", str(REPO / "esphome_components" / "somfy_rts"),
+        "-I", str(REPO / "esphome_components" / "rts_gateway"),
         str(TESTS_CPP / "test_decoder.cpp"),
-        str(REPO / "esphome_components" / "somfy_rts" / "somfy_rts.cpp"),
+        str(REPO / "esphome_components" / "rts_gateway" / "rts_gateway.cpp"),
         "-o", str(exe),
     ]
     result = subprocess.run(compile_cmd, check=False, capture_output=True, text=True, timeout=600)

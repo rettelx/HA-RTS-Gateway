@@ -11,9 +11,10 @@ from conftest import make_runtime_data
 from fakes import FakeConfigEntry, make_device, prepare_entity
 from homeassistant.exceptions import ServiceValidationError
 
-from custom_components.somfy_rts import rf
-from custom_components.somfy_rts.const import (
+from custom_components.rts_gateway import rf
+from custom_components.rts_gateway.const import (
     DOMAIN,
+    PROG_MODE_REPEATS,
     SERVICE_ADD_TO_GROUP,
     SERVICE_ENTER_PROGRAMMING_MODE,
     SERVICE_GOTO_MY_POSITION,
@@ -29,9 +30,9 @@ from custom_components.somfy_rts.const import (
     SERVICE_SET_TILT_POSITION,
     SERVICE_UNLINK_REMOTE,
 )
-from custom_components.somfy_rts.cover import SomfyRTSCover
-from custom_components.somfy_rts.rolling_code import RollingCodeStore
-from custom_components.somfy_rts.services import (
+from custom_components.rts_gateway.cover import SomfyRTSCover
+from custom_components.rts_gateway.rolling_code import RollingCodeStore
+from custom_components.rts_gateway.services import (
     async_setup_services,
     async_unload_services,
 )
@@ -227,7 +228,7 @@ def test_set_my_position_simulated_sends_nothing(hass, fake_rf, no_timer):
 
 
 def test_enter_programming_mode_long_press(hass, fake_rf, no_timer):
-    """Appui long : 35 repetitions de PROG."""
+    """Appui long : le nombre regle de repetitions de PROG."""
     asyncio.run(async_setup_services(hass))
     build_real_cover(hass)
 
@@ -235,7 +236,7 @@ def test_enter_programming_mode_long_press(hass, fake_rf, no_timer):
         "entity_id": "cover.test"
     })
     assert fake_rf.sent[-1]["command"] == "PROG"
-    assert fake_rf.sent[-1]["repeats"] == 35
+    assert fake_rf.sent[-1]["repeats"] == PROG_MODE_REPEATS
 
 
 def test_send_prog_short_press(hass, fake_rf, no_timer):
@@ -594,7 +595,7 @@ def build_group_env(hass, members_config=()):
 
 def test_add_to_group_pairs_cover(hass, fake_rf, no_timer, monkeypatch):
     """Ajout : PROG long sur le volet puis PROG court du groupe."""
-    from custom_components.somfy_rts import services
+    from custom_components.rts_gateway import services
 
     monkeypatch.setattr(services, "PROG_MODE_JOG_S", 0)
     monkeypatch.setattr(services, "PROG_PAIR_SETTLE_S", 0)
@@ -609,7 +610,7 @@ def test_add_to_group_pairs_cover(hass, fake_rf, no_timer, monkeypatch):
 
     # Sequence radio : mode programmation sur le volet, puis PROG groupe.
     assert [(f["address"], f["command"], f["repeats"]) for f in fake_rf.sent] == [
-        (10000001, "PROG", 35),
+        (10000001, "PROG", PROG_MODE_REPEATS),
         (1500000, "PROG", 3),
     ]
     # Suivi dans la config et sur l'entite.
@@ -621,7 +622,7 @@ def test_add_to_group_pairs_cover(hass, fake_rf, no_timer, monkeypatch):
 
 def test_remove_from_group_unpairs_cover(hass, fake_rf, no_timer, monkeypatch):
     """Retrait : meme sequence PROG, appartenance retiree."""
-    from custom_components.somfy_rts import services
+    from custom_components.rts_gateway import services
 
     monkeypatch.setattr(services, "PROG_MODE_JOG_S", 0)
     monkeypatch.setattr(services, "PROG_PAIR_SETTLE_S", 0)
@@ -636,7 +637,7 @@ def test_remove_from_group_unpairs_cover(hass, fake_rf, no_timer, monkeypatch):
     })
 
     assert [(f["address"], f["command"], f["repeats"]) for f in fake_rf.sent] == [
-        (10000001, "PROG", 35),
+        (10000001, "PROG", PROG_MODE_REPEATS),
         (1500000, "PROG", 3),
     ]
     assert member._group_addresses == []
@@ -646,7 +647,7 @@ def test_remove_from_group_unpairs_cover(hass, fake_rf, no_timer, monkeypatch):
 
 def test_add_to_group_accepts_single_entity_id(hass, fake_rf, no_timer, monkeypatch):
     """Le champ entity_id accepte aussi une chaine simple."""
-    from custom_components.somfy_rts import services
+    from custom_components.rts_gateway import services
 
     monkeypatch.setattr(services, "PROG_MODE_JOG_S", 0)
     monkeypatch.setattr(services, "PROG_PAIR_SETTLE_S", 0)
@@ -664,7 +665,7 @@ def test_add_to_group_accepts_single_entity_id(hass, fake_rf, no_timer, monkeypa
 
 def test_add_to_group_handles_several_members(hass, fake_rf, no_timer, monkeypatch):
     """Plusieurs volets : chaque moteur a sa sequence PROG."""
-    from custom_components.somfy_rts import services
+    from custom_components.rts_gateway import services
 
     monkeypatch.setattr(services, "PROG_MODE_JOG_S", 0)
     monkeypatch.setattr(services, "PROG_PAIR_SETTLE_S", 0)
@@ -683,8 +684,8 @@ def test_add_to_group_handles_several_members(hass, fake_rf, no_timer, monkeypat
 
     addresses = [(f["address"], f["repeats"]) for f in fake_rf.sent]
     assert addresses == [
-        (10000001, 35), (1500000, 3),
-        (10000002, 35), (1500000, 3),
+        (10000001, PROG_MODE_REPEATS), (1500000, 3),
+        (10000002, PROG_MODE_REPEATS), (1500000, 3),
     ]
     assert group.extra_state_attributes["members"] == ["cover.v1", "cover.v2"]
     for member in members:
@@ -758,7 +759,7 @@ def test_group_membership_validated_before_any_transmission(
 ):
     """Toute la validation precede les emissions radio : aucun volet n'est
     appaire si un autre membre de la liste est invalide."""
-    from custom_components.somfy_rts import services
+    from custom_components.rts_gateway import services
 
     monkeypatch.setattr(services, "PROG_MODE_JOG_S", 0)
     monkeypatch.setattr(services, "PROG_PAIR_SETTLE_S", 0)

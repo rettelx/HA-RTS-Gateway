@@ -8,13 +8,13 @@ import pytest
 from fakes import FakeConfigEntry
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from custom_components.somfy_rts import (
+from custom_components.rts_gateway import (
     async_setup,
     async_setup_entry,
     async_unload_entry,
 )
-from custom_components.somfy_rts.const import DOMAIN, RX_EVENT
-from custom_components.somfy_rts.rolling_code import RollingCodeStore
+from custom_components.rts_gateway.const import DOMAIN, RX_EVENT
+from custom_components.rts_gateway.rolling_code import RollingCodeStore
 
 
 def make_entry(entry_id="entry1", transmitter="radio_frequency.test_radio", enable_rx=True):
@@ -34,8 +34,8 @@ def test_async_setup(hass):
         assert await async_setup(hass, None) is True
         assert DOMAIN in hass.data
         assert isinstance(hass.data[DOMAIN]["rolling_codes"], RollingCodeStore)
-        assert ("somfy_rts", "link_remote") in hass.services.registered
-        assert ("somfy_rts", "unlink_remote") in hass.services.registered
+        assert ("rts_gateway", "link_remote") in hass.services.registered
+        assert ("rts_gateway", "unlink_remote") in hass.services.registered
 
     asyncio.run(scenario())
 
@@ -46,6 +46,39 @@ def test_setup_entry_requires_known_transmitter(hass, fake_rf):
         entry = make_entry(transmitter="radio_frequency.unknown")
         with pytest.raises(ConfigEntryNotReady):
             await async_setup_entry(hass, entry)
+
+    asyncio.run(scenario())
+
+
+def test_setup_entry_removes_stale_devices(hass, fake_rf):
+    """Les appareils dont l'adresse a quitte l'entree sont purges
+    du registre au rechargement ; les autres sont conserves."""
+    async def scenario():
+        assert await async_setup(hass, None) is True
+        entry = make_entry()
+        entry.data["devices"] = [{"address": "11111111", "name": "Volet"}]
+        entry.data["sensors"] = [{"address": "22222222", "name": "Soleil"}]
+        hass.config_entries.entries.append(entry)
+
+        registry = hass.data["device_registry"]
+        stale = registry.async_get_or_create(
+            entry.entry_id, {(DOMAIN, "99999999")}
+        )
+        stale_sensor = registry.async_get_or_create(
+            entry.entry_id, {(DOMAIN, "sensor_33333333")}
+        )
+        kept = registry.async_get_or_create(
+            entry.entry_id, {(DOMAIN, "11111111")}
+        )
+        other_entry = registry.async_get_or_create(
+            "other_entry", {(DOMAIN, "99999999")}
+        )
+
+        assert await async_setup_entry(hass, entry) is True
+
+        assert registry.removed == [stale.id, stale_sensor.id]
+        assert kept.id in registry._devices._items
+        assert other_entry.id in registry._devices._items
 
     asyncio.run(scenario())
 
@@ -80,7 +113,7 @@ def test_setup_entry_without_rx(hass, fake_rf):
 
 
 def test_options_override_enable_rx():
-    from custom_components.somfy_rts import _rx_enabled
+    from custom_components.rts_gateway import _rx_enabled
 
     assert _rx_enabled(make_entry(enable_rx=True)) is True
     assert _rx_enabled(make_entry(enable_rx=False)) is False
@@ -135,8 +168,8 @@ def test_reloading_the_only_entry_registers_services_again(hass, fake_rf):
         assert not hass.services.registered
 
         assert await async_setup_entry(hass, entry) is True
-        assert ("somfy_rts", "link_remote") in hass.services.registered
-        assert ("somfy_rts", "unlink_remote") in hass.services.registered
+        assert ("rts_gateway", "link_remote") in hass.services.registered
+        assert ("rts_gateway", "unlink_remote") in hass.services.registered
         assert "rx_handler" in hass.data[DOMAIN]
 
     asyncio.run(scenario())
@@ -153,7 +186,7 @@ def test_unload_keeps_handler_while_other_entries_listen(hass, fake_rf):
 
         assert await async_unload_entry(hass, first) is True
         assert "rx_handler" in hass.data[DOMAIN]
-        assert ("somfy_rts", "link_remote") in hass.services.registered
+        assert ("rts_gateway", "link_remote") in hass.services.registered
 
         # Unloading the last RX-enabled entry stops the handler.
         assert await async_unload_entry(hass, second) is True

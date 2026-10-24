@@ -9,10 +9,10 @@ from unittest.mock import AsyncMock
 from fakes import FakeConfigEntry, make_device, prepare_entity
 from homeassistant.components.light import ColorMode
 
-from custom_components.somfy_rts import light as light_module
-from custom_components.somfy_rts.const import SomfyCommand
-from custom_components.somfy_rts.light import SomfyRTSLight
-from custom_components.somfy_rts.rolling_code import RollingCodeStore
+from custom_components.rts_gateway import light as light_module
+from custom_components.rts_gateway.const import SomfyCommand
+from custom_components.rts_gateway.light import SomfyRTSLight
+from custom_components.rts_gateway.rolling_code import RollingCodeStore
 
 STEP_INTERVAL = 0.01
 
@@ -31,7 +31,7 @@ def build_light(hass, **device_overrides):
         },
         runtime_data=make_runtime_data(),
     )
-    hass.data.setdefault("somfy_rts", {})["rolling_codes"] = RollingCodeStore(hass)
+    hass.data.setdefault("rts_gateway", {})["rolling_codes"] = RollingCodeStore(hass)
     entity = SomfyRTSLight(hass, entry, device)
     prepare_entity(entity, "light.test")
     return entity
@@ -174,7 +174,7 @@ def test_light_setup_entry(hass):
     """Le setup ne cree que les types eclairage."""
     from conftest import make_runtime_data
 
-    from custom_components.somfy_rts import light as light_module
+    from custom_components.rts_gateway import light as light_module
 
     device = make_device(device_type="light", protocol="rts_80bit")
     entry = FakeConfigEntry(
@@ -185,7 +185,7 @@ def test_light_setup_entry(hass):
         },
         runtime_data=make_runtime_data(),
     )
-    hass.data.setdefault("somfy_rts", {})[
+    hass.data.setdefault("rts_gateway", {})[
         "rolling_codes"
     ] = RollingCodeStore(hass)
     added = []

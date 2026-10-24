@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from custom_components.somfy_rts.rolling_code import RollingCodeStore
+from custom_components.rts_gateway.rolling_code import RollingCodeStore
 
 
 def test_get_next_increments_and_persists(hass, fake_store):
@@ -48,10 +48,10 @@ def test_set_and_remove(hass, fake_store):
 
 def test_corrupted_storage_is_reset(hass, fake_store):
     async def scenario():
-        fake_store._bank["somfy_rts.rolling_codes"] = "not-a-dict"
+        fake_store._bank["rts_gateway.rolling_codes"] = "not-a-dict"
         store = RollingCodeStore(hass)
         assert await store.async_get(42) == 1
         await store.async_set(42, 10)
-        assert fake_store._bank["somfy_rts.rolling_codes"]["devices"]["42"] == {"counter": 10}
+        assert fake_store._bank["rts_gateway.rolling_codes"]["devices"]["42"] == {"counter": 10}
 
     asyncio.run(scenario())

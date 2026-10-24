@@ -10,13 +10,13 @@ from conftest import make_runtime_data
 from fakes import FakeConfigEntry
 from homeassistant.core import Event
 
-from custom_components.somfy_rts.const import (
+from custom_components.rts_gateway.const import (
     DOMAIN,
     RX_EVENT,
     TX_LOOPBACK_TTL,
     SomfyCommand,
 )
-from custom_components.somfy_rts.rx_handler import SomfyRTSRxHandler
+from custom_components.rts_gateway.rx_handler import SomfyRTSRxHandler
 
 
 def make_entity(address_int=1000, linked=()):
@@ -188,10 +188,10 @@ def test_recent_tx_is_pruned(hass):
 
 
 # =============================================================================
-# Evenements somfy_rts_frame
+# Evenements rts_gateway_frame
 # =============================================================================
 def test_frame_event_fired_for_remote(hass):
-    from custom_components.somfy_rts.const import EVENT_FRAME
+    from custom_components.rts_gateway.const import EVENT_FRAME
 
     entity = make_entity(address_int=1000)
     handler = make_handler(hass, entities=[entity])
@@ -209,7 +209,7 @@ def test_frame_event_fired_for_remote(hass):
 
 
 def test_frame_event_fired_once_per_press(hass):
-    from custom_components.somfy_rts.const import EVENT_FRAME
+    from custom_components.rts_gateway.const import EVENT_FRAME
 
     entity = make_entity(address_int=1000)
     handler = make_handler(hass, entities=[entity])
@@ -221,7 +221,7 @@ def test_frame_event_fired_once_per_press(hass):
 
 
 def test_frame_event_gateway_loopback(hass):
-    from custom_components.somfy_rts.const import EVENT_FRAME
+    from custom_components.rts_gateway.const import EVENT_FRAME
 
     entity = make_entity(address_int=1000)
     handler = make_handler(hass, entities=[entity])
@@ -237,7 +237,7 @@ def test_frame_event_gateway_loopback(hass):
 
 
 def test_frame_event_unknown_address(hass):
-    from custom_components.somfy_rts.const import EVENT_FRAME
+    from custom_components.rts_gateway.const import EVENT_FRAME
 
     handler = make_handler(hass, entities=[])
     fire(handler, address=999999, command=8, rolling_code=1)
@@ -247,7 +247,7 @@ def test_frame_event_unknown_address(hass):
 
 
 def test_frame_event_carries_bits_and_step(hass):
-    from custom_components.somfy_rts.const import EVENT_FRAME
+    from custom_components.rts_gateway.const import EVENT_FRAME
 
     handler = make_handler(hass, entities=[])
     handler._handle_event(

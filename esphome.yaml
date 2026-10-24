@@ -1,12 +1,12 @@
 # =============================================================================
-# Somfy RTS Gateway - ESP32 + CC1101 (ESPHome 2026.10+)
+# RTS Gateway - ESP32 + CC1101 (ESPHome 2026.10+)
 #
 # TX: HA sends the RTS timings through the native `radio_frequency` entity
 #     (ir_rf_proxy) -> remote_transmitter bit-bangs the GDO0 pin and the
 #     CC1101 ("async serial" mode) modulates its 433.42 MHz carrier (OOK).
 # RX: the CC1101 demodulates OOK, GDO2 outputs the baseband signal,
-#     remote_receiver captures the timings and the local `somfy_rts`
-#     component decodes the frames into the `esphome.somfy_rts_rx` event.
+#     remote_receiver captures the timings and the local `rts_gateway`
+#     component decodes the frames into the `esphome.rts_gateway_rx` event.
 #
 # Two-pin wiring (recommended by the cc1101 docs): GDO0 -> ${pin_gdo0}
 # for transmit, GDO2 -> ${pin_gdo2} for receive.
@@ -21,7 +21,7 @@
 # =============================================================================
 
 substitutions:
-  name: somfy-rts-gateway
+  name: rts-gateway
   friendly_name: RTS Gateway
   # <<< Change this line to match your board >>>
   board_package: esphome_boards/esp32-s3-zero.yaml
@@ -38,12 +38,12 @@ esphome:
       # Keep the CC1101 in permanent OOK receive (GDO0 = baseband output)
       - cc1101.begin_rx: cc1101_radio
 
-# Local Somfy RTS decoder (esphome_components/somfy_rts)
+# Local RTS decoder (esphome_components/rts_gateway)
 external_components:
   - source:
       type: local
       path: esphome_components
-    components: [somfy_rts]
+    components: [rts_gateway]
 
 wifi:
   ssid: !secret wifi_ssid
@@ -57,6 +57,7 @@ api:
 
 ota:
   - platform: esphome
+    encryption:
 
 logger:
 
@@ -109,15 +110,15 @@ remote_receiver:
     # dump: raw
 
 # =============================================================================
-# Somfy RTS decoder: publishes every received frame to Home Assistant
+# RTS decoder: publishes every received frame to Home Assistant
 # =============================================================================
-somfy_rts:
-  id: somfy_decoder
+rts_gateway:
+  id: rts_decoder
   receiver_id: rf_rx
   on_command:
     then:
       - homeassistant.event:
-          event: esphome.somfy_rts_rx
+          event: esphome.rts_gateway_rx
           data:
             address: !lambda |-
               return to_string(address);

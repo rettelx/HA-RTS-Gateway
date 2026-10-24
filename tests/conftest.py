@@ -1,4 +1,4 @@
-"""Shared fixtures for the Somfy RTS test suite."""
+"""Shared fixtures for the RTS test suite."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ sys.path.insert(0, str(TESTS_DIR.parent))
 import pytest
 from fakes import FakeHass, FakeHAStore, FakeRF
 
-from custom_components.somfy_rts import rf, rolling_code
+from custom_components.rts_gateway import rf, rolling_code
 
 
 @pytest.fixture
@@ -28,6 +28,12 @@ def fake_store(monkeypatch):
     return FakeHAStore
 
 
+@pytest.fixture(autouse=True)
+def no_press_hold(monkeypatch):
+    """The wizard holds long presses out on air: no real sleeping."""
+    monkeypatch.setattr(rf, "press_air_time_s", lambda *args, **kwargs: 0.0)
+
+
 @pytest.fixture
 def fake_rf(monkeypatch):
     """Replace the rf helpers with a recorder."""
@@ -40,7 +46,7 @@ def fake_rf(monkeypatch):
 @pytest.fixture
 def no_timer(monkeypatch):
     """Replace the position tracking timer with a manual recorder."""
-    from custom_components.somfy_rts import cover
+    from custom_components.rts_gateway import cover
 
     cancels: list[bool] = []
 

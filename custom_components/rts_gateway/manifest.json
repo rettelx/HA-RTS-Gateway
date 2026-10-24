@@ -1,0 +1,19 @@
+{
+  "domain": "rts_gateway",
+  "name": "RTS Gateway",
+  "codeowners": [
+    "@rettelx"
+  ],
+  "dependencies": [
+    "radio_frequency"
+  ],
+  "after_dependencies": [
+    "esphome"
+  ],
+  "documentation": "https://github.com/rettelx/HA-RTS-Gateway/blob/main/README.md",
+  "issue_tracker": "https://github.com/rettelx/HA-RTS-Gateway/issues",
+  "iot_class": "local_push",
+  "config_flow": true,
+  "diagnostics": true,
+  "version": "0.5.0"
+}

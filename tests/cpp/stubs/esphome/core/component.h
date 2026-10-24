@@ -4,7 +4,7 @@
 
 namespace esphome {
 
-// Stub of esphome::Component covering the surface used by somfy_rts.
+// Stub of esphome::Component covering the surface used by rts_gateway.
 class Component {
  public:
   virtual void setup() {}

@@ -7,10 +7,10 @@ import asyncio
 from conftest import make_runtime_data
 from fakes import FakeConfigEntry, make_device, prepare_entity
 
-from custom_components.somfy_rts.const import DOMAIN
-from custom_components.somfy_rts.cover import SomfyRTSCover
-from custom_components.somfy_rts.diagnostics import async_get_config_entry_diagnostics
-from custom_components.somfy_rts.rolling_code import RollingCodeStore
+from custom_components.rts_gateway.const import DOMAIN
+from custom_components.rts_gateway.cover import SomfyRTSCover
+from custom_components.rts_gateway.diagnostics import async_get_config_entry_diagnostics
+from custom_components.rts_gateway.rolling_code import RollingCodeStore
 
 
 def test_config_entry_diagnostics(hass):
