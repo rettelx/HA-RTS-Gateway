@@ -251,8 +251,10 @@ A remote's address can also be observed in the ESPHome logs
 
 RTS motors have no position feedback: the estimate drifts slowly.
 `recalibrate` (or the *Position recalibration* button) runs a
-close → open → back-to-start cycle, re-anchored on the mechanical end
-stops. Best scheduled as a nightly automation.
+cycle to the nearest end stop and back — half the travel; the motor
+cuts at its mechanical stop and re-anchors the estimate. The phase
+waits 1.3x the configured travel time, so slightly under-measured
+durations still reach the stop. Best scheduled as a nightly automation.
 
 ### RTS groups
 
@@ -304,7 +306,7 @@ reacts on its own to an alarm, realign its position with `set_position`.
 | `enter_programming_mode` | long PROG: the motor enters programming mode |
 | `send_prog` | short PROG: pairs / unpairs the gateway's address |
 | `set_position` / `set_tilt_position` | realign the estimate without moving the motor |
-| `recalibrate` | close → open → back cycle |
+| `recalibrate` | nearest end stop → back to start |
 | `send_command` | raw RTS command (UP, DOWN, MY, STOP, PROG, STEP_*) |
 | `send_step_command` | step with explicit size, 1-127 (80 bit) |
 

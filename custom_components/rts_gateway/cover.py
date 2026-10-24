@@ -911,7 +911,7 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         )
 
     def async_recalibrate(self) -> None:
-        """Start a full close/open cycle to re-anchor the estimate."""
+        """Start a cycle to the nearest end stop to re-anchor the estimate."""
         if self._recal_task is not None and not self._recal_task.done():
             return
         self._recal_task = self._hass.async_create_task(
@@ -919,45 +919,33 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         )
 
     async def _async_recalibrate_cycle(self) -> None:
-        """Run to both mechanical end stops to fix the 0/100 estimates.
+        """Travel to the nearest end stop, then back to the start.
 
-        The motors cut off on their own at the end stops, so the
-        position estimate is hard-anchored after each travel. The cover
-        is then brought back to the position it had before the cycle.
+        One anchor is enough: from a verified end, extrapolation with
+        the configured travel times is exact, and full open/close
+        commands issued afterwards re-verify their own end stop on
+        their own (no stop command is sent for the end targets, the
+        motor cuts at the stop). Going to the nearest end halves the
+        cycle. The phase waits 1.3x the configured travel time, so a
+        slightly under-measured duration still lets the motor reach
+        its stop before the return move.
         """
         start_position = self.current_cover_position
-        close_ms = int(
-            self._device_config.get(CONF_CLOSE_TIME_MS, DEFAULT_CLOSE_TIME_MS)
-        )
-        open_ms = int(
-            self._device_config.get(CONF_OPEN_TIME_MS, DEFAULT_OPEN_TIME_MS)
-        )
-        await self._async_send_command(SomfyCommand.DOWN)
-        self._position_estimator.start("down", 0)
-        self._start_tracking()
+        if start_position <= 50:
+            travel_ms = int(
+                self._device_config.get(
+                    CONF_CLOSE_TIME_MS, DEFAULT_CLOSE_TIME_MS
+                )
+            )
+            await self.async_close_cover()
+        else:
+            travel_ms = int(
+                self._device_config.get(CONF_OPEN_TIME_MS, DEFAULT_OPEN_TIME_MS)
+            )
+            await self.async_open_cover()
+        await asyncio.sleep(travel_ms / 1000 * 1.3 + 1)
         if self._is_group:
-            self._track_members_movement("down", 0)
-        self.async_write_ha_state()
-        await asyncio.sleep(close_ms / 1000 * 1.3 + 1)
-        self._position_estimator.restore(0)
-        self._stop_tracking()
-        if self._is_group:
-            self._restore_members_position(0)
-        self.async_write_ha_state()
-        self._notify_parent_groups()
-        await self._async_send_command(SomfyCommand.UP)
-        self._position_estimator.start("up", 100)
-        self._start_tracking()
-        if self._is_group:
-            self._track_members_movement("up", 100)
-        self.async_write_ha_state()
-        await asyncio.sleep(open_ms / 1000 * 1.3 + 1)
-        self._position_estimator.restore(100)
-        self._stop_tracking()
-        if self._is_group:
-            self._restore_members_position(100)
-        self.async_write_ha_state()
-        self._notify_parent_groups()
+            self._stop_members_tracking()
         # Back to where the cover was before the recalibration.
         if start_position != self.current_cover_position:
             await self.async_set_cover_position(position=start_position)

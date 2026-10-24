@@ -802,18 +802,18 @@ def test_memorize_my_position_long_press(hass, fake_rf, no_timer):
     asyncio.run(scenario())
 
 
-def test_recalibrate_cycle_anchors_both_ends(hass, fake_rf, no_timer):
-    """Recalage : fermeture complete puis ouverture complete."""
+def test_recalibrate_goes_to_nearest_end(hass, fake_rf, no_timer):
+    """Recalage : butee la plus proche (haute depuis 100)."""
     async def scenario():
         entity = build_cover(hass, open_time_ms=100, close_time_ms=100)
         await entity.async_added_to_hass()
 
         entity.async_recalibrate()
         assert entity._recal_task is not None
-        await entity._recal_task  # ~2.3 s avec des courses de 100 ms
+        await entity._recal_task  # ~1.1 s avec une course de 100 ms
         commands = [f["command"] for f in fake_rf.sent]
-        assert commands == ["DOWN", "UP"]
-        assert entity.current_cover_position == 100  # ancre a l ouverture
+        assert commands == ["UP"]  # depuis 100, la butee haute est la plus proche
+        assert entity.current_cover_position == 100
 
     asyncio.run(scenario())
 
@@ -828,8 +828,8 @@ def test_recalibrate_returns_to_start_position(hass, fake_rf, no_timer):
         entity.async_recalibrate()
         await entity._recal_task
         commands = [f["command"] for f in fake_rf.sent]
-        assert commands == ["DOWN", "UP", "DOWN"]
-        assert entity.is_closing is True  # retour vers 50 en cours
+        assert commands == ["DOWN", "UP"]  # butee basse (50), retour vers 50
+        assert entity.is_opening is True  # retour vers 50 en cours
         entity._position_estimator.stop()
         entity._stop_tracking()
 
@@ -1381,18 +1381,18 @@ def test_group_native_my_tracks_own_positions(hass, fake_rf, no_timer):
     asyncio.run(scenario())
 
 
-def test_group_recalibrate_restores_members(hass, fake_rf, no_timer, monkeypatch):
-    """Le recalage du groupe ancre aussi les membres sur les butees."""
+def test_group_recalibrate_restores_members(hass, fake_rf, no_timer):
+    """Le recalage du groupe va a la butee la plus proche et ancre les membres.
 
-    async def fake_sleep(_seconds):
-        return None
+    Les sommeils ne sont pas neutralises : l'ancrage est naturel
+    (extrapolation jusqu'a la butee), il faut laisser le temps s'ecouler.
+    """
 
     async def scenario():
-        monkeypatch.setattr(cover_module.asyncio, "sleep", fake_sleep)
         group, members = build_group_with_members(hass)
 
         group.async_recalibrate()
-        await group._recal_task
+        await group._recal_task  # ~2.3 s (course du groupe de 1000 ms)
 
         assert group.current_cover_position == 100
         for member in members:

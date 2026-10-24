@@ -1,7 +1,7 @@
 """Button platform for RTS devices.
 
 Adds device-page actions: go to the favorite (My) position, recalibrate
-the position estimate with a full close/open cycle, and the PROG
+the position estimate with a cycle to the nearest end stop, and the PROG
 pairing/unpairing frame (the same radio command toggles the pairing on
 the motor, the same radio command toggling the pairing).
 """

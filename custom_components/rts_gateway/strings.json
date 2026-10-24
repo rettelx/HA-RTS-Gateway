@@ -679,7 +679,7 @@
     },
     "recalibrate": {
       "name": "Recalibrate position",
-      "description": "Re-anchors the position estimate: full close then full open cycle, then back to the starting position. Run it from an automation at night to compensate the long-term drift of RTS covers.",
+      "description": "Re-anchors the position estimate: travel to the nearest end stop, then back to the starting position. Run it from an automation at night to compensate the long-term drift of RTS covers.",
       "fields": {
         "entity_id": {
           "name": "Entity",

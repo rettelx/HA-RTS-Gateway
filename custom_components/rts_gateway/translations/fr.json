@@ -679,7 +679,7 @@
     },
     "recalibrate": {
       "name": "Recaler la position",
-      "description": "Ré-ancre l'estimation de position : cycle de fermeture complète puis d'ouverture complète, puis retour à la position de départ. À appeler depuis une automatisation nocturne pour compenser la dérive à long terme des volets RTS.",
+      "description": "Ré-ancre l'estimation de position : trajet jusqu'à la butée la plus proche, puis retour à la position de départ. À appeler depuis une automatisation nocturne pour compenser la dérive à long terme des volets RTS.",
       "fields": {
         "entity_id": {
           "name": "Entité",
