@@ -45,7 +45,7 @@ Roller shutters, shutters, venetian blinds, curtains (left/right/center opening)
 
 ### 👥 RTS groups
 
-A group is not a device: it is an extra RTS address paired into the memory of several motors. The integration creates the address (reserved range 1,000,000 – 2,097,151), walks you through pairing each member, then **drives all shutters with a single frame**. Member entities follow the movement at their own speed, and the group's displayed position is the average of its members — even when one of them is operated individually.
+A group is not a device: it is an extra RTS address paired into the memory of several motors. The integration creates the address (reserved range 1,000,000 – 2,097,151) and walks you through pairing each member. **Open and close send a single frame on the group address**: every motor runs to its end stop and the member estimates follow at their own speed. **Setting the group to a position drives each member individually** (Home Assistant `CoverGroup` semantics, like ESPSomfyRTS): a single group frame carries no target, so one common stop would land every motor wherever it happens to be. The group's displayed position is the average of its members — even when one of them is operated individually.
 
 ### 🎮 Physical remotes
 
@@ -277,10 +277,22 @@ is saved only after confirmation. Removing a group follows the same
 principle from **"Remove a shutter group"**: guided unpairing of each
 member (optional), then removal of the group.
 
-Driving the group also moves the member entities: their estimate follows
-the movement (at their own speed, without extra radio), including target
-position, MY, tilt and recalibration. The group's displayed position is
-the **average** of its members.
+Driving the group also moves the member entities, and the group's
+displayed position is the **average** of its members. The group itself
+has no travel times or position of its own: its estimate is re-anchored
+on the member average before every group command, its motion state
+(`opening`/`closing`) mirrors its live members, and a group movement
+completes when the slowest member arrives.
+
+- **Open / close**: one frame on the group address. The motors run to
+  their end stop; the member estimates follow at their own speed,
+  without extra radio.
+- **Position X %**: every member is commanded individually, on its own
+  address, and stopped at X by its own timing. Direction presses use a
+  single repeat (like a physical remote) and are spaced by their air
+  time so the transceiver never sees back-to-back bursts; the stop
+  frames keep their full redundancy. MY, tilt and recalibration keep
+  the mirrored estimate (no extra radio).
 
 The `add_to_group` / `remove_from_group` services send the same
 sequence without confirmation — keep them for automations.
