@@ -1329,35 +1329,108 @@ def test_group_commands_move_members(hass, fake_rf, no_timer):
     asyncio.run(scenario())
 
 
-def test_group_position_shadows_members(hass, fake_rf, no_timer, monkeypatch):
-    """Une cible intermediaire : les membres l'atteignent sans radio."""
+def test_group_position_commands_each_member(hass, fake_rf, no_timer, monkeypatch):
+    """Une cible intermediaire : chaque membre est commande separement.
+
+    Une seule trame sur l'adresse du groupe ne peut pas poser tous les
+    moteurs a la meme position intermediaire (ils entendraient le meme
+    arret) : le groupe commande chaque membre individuellement, comme
+    le CoverGroup natif de HA et ESPSomfyRTS."""
     async def scenario():
         group, members = build_group_with_members(hass)
+        # Vitesses egales pour un arret deterministe au tick de 1 s.
+        members[1]._position_estimator.set_travel_times(1000, 1000)
 
-        # Exact binary clock: (base + 0.5) - base == 0.5 on any
-        # platform, so the position assertions are deterministic.
         base = 4096.0
         monkeypatch.setattr(time, "monotonic", lambda: base)
         await group.async_set_cover_position(position=50)
+
+        # Aucune trame sur l'adresse du groupe : chaque membre a emis
+        # sa propre commande de descente sur sa propre adresse.
+        assert [f["address"] for f in fake_rf.sent] == [10000000, 10000001]
+        # Presses de direction alllegees : une seule repetition,
+        # comme une telecommande physique.
+        assert [f["repeats"] for f in fake_rf.sent] == [1, 1]
         for member in members:
             assert member.is_closing
-            assert member._position_estimator.target == 50
+            assert member._shadow_tracking is False
+
+        # Chaque membre s'arrete a 50 par son propre chronometrage,
+        # avec son propre STOP radio.
+        monkeypatch.setattr(time, "monotonic", lambda: base + 0.5)
+        for member in members:
+            await member._async_movement_tick(None)
+            assert member.current_cover_position == 50
+            assert member.is_closing is None
+        assert [f["command"] for f in fake_rf.sent[-2:]] == ["STOP", "STOP"]
+        # Le groupe affiche la moyenne des membres.
+        assert group.current_cover_position == 50
+
+    asyncio.run(scenario())
+
+
+def test_group_close_does_not_freeze_members(hass, fake_rf, no_timer, monkeypatch):
+    """Regression : une fermeture du groupe ne fige plus les membres.
+
+    L'estimateur interne du groupe peut etre perime (rest'e a 0 depuis
+    une ancienne fermeture) : le tick du groupe atteignait sa cible des
+    le premier tick et gelait tous les membres a ~1 s de leur propre
+    course, alors que les moteurs faisaient la descente complete
+    (incident 2026-10-25 : volets affiches a 93-94 % toute la nuit).
+    """
+    async def scenario():
+        group, members = build_group_with_members(hass)
+        # Membres ouverts (~97 %) apres restauration, groupe perime a 0.
+        for member in members:
+            member._position_estimator.restore(97)
+        group._position_estimator.restore(0)
+
+        base = 4096.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        await group.async_close_cover()
+        # Le groupe repart de la moyenne des membres, pas de son
+        # estimation interne perimee.
+        assert group._position_estimator.position == 97
+        for member in members:
+            assert member.is_closing
             assert member._shadow_tracking is True
 
-        # Le temps passe : chaque membre avance a SA vitesse propre.
-        # Volet 0 (1 s) arrive a 50 ; Volet 1 (0,5 s), plus rapide,
-        # est deja en butee basse - physiquement coherent.
-        frames = len(fake_rf.sent)
-        monkeypatch.setattr(time, "monotonic", lambda: base + 0.5)
-        await members[0]._async_movement_tick(None)
-        await members[1]._async_movement_tick(None)
-        assert members[0].current_cover_position == 50
-        assert members[1].current_cover_position == 0
+        # Le groupe termine sa descente : les membres ne sont PAS
+        # gels, ils continuent leur propre course (pas de STOP radio
+        # pour une butee).
+        monkeypatch.setattr(time, "monotonic", lambda: base + 1.5)
+        await group._async_movement_tick(None)
+        assert group._position_estimator.is_moving is False
         for member in members:
-            assert member._shadow_tracking is False
-            assert member.is_closing is None
-        # Aucun arret radio emis depuis les membres.
-        assert len(fake_rf.sent) == frames
+            assert member._shadow_tracking is True
+        assert [f["command"] for f in fake_rf.sent] == ["DOWN"]
+
+        # Les membres terminent chacun a leur rythme jusqu'a la butee.
+        monkeypatch.setattr(time, "monotonic", lambda: base + 2.0)
+        for member in members:
+            await member._async_movement_tick(None)
+            assert member.current_cover_position == 0
+            assert member.is_closed
+        assert group.current_cover_position == 0
+
+    asyncio.run(scenario())
+
+
+def test_group_travel_times_derive_from_members(hass, fake_rf, no_timer):
+    """Un groupe n'a pas de temps de course propres : ils viennent des membres."""
+    async def scenario():
+        group, members = build_group_with_members(
+            hass, open_time_ms=1000, close_time_ms=1000
+        )
+        # Les membres sont plus lents que la config du groupe.
+        members[0]._position_estimator.set_travel_times(4000, 4000)
+        members[1]._position_estimator.set_travel_times(2000, 3000)
+        await group.async_close_cover()
+        # Le groupe se cale sur le membre le plus lent : sa course
+        # d'estimation et son STOP radio sur cible intermediaire
+        # attendent le temps reel des moteurs.
+        assert group._position_estimator.open_time_ms == 4000
+        assert group._position_estimator.close_time_ms == 4000
 
     asyncio.run(scenario())
 

@@ -34,6 +34,18 @@ def no_press_hold(monkeypatch):
     monkeypatch.setattr(rf, "press_air_time_s", lambda *args, **kwargs: 0.0)
 
 
+@pytest.fixture(autouse=True)
+def no_member_frame_gap(monkeypatch):
+    """Group member commands are spaced on air: no real sleeping.
+
+    Several tests freeze time.monotonic while a movement runs; a
+    positive asyncio.sleep would then never wake up.
+    """
+    from custom_components.rts_gateway import cover
+
+    monkeypatch.setattr(cover, "GROUP_MEMBER_FRAME_GAP_S", 0)
+
+
 @pytest.fixture
 def fake_rf(monkeypatch):
     """Replace the rf helpers with a recorder."""

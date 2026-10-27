@@ -72,6 +72,14 @@ PARALLEL_UPDATES = 1
 _LOGGER = logging.getLogger(__name__)
 
 UPDATE_INTERVAL = timedelta(seconds=1)
+# Breathing room between the radio bursts of a group's member
+# commands: back-to-back bursts flap the CC1101 between RX and TX
+# and frames get lost (see the warning in esphome.yaml). Spacing
+# the direction presses also staggers each member's stop frame.
+GROUP_MEMBER_FRAME_GAP_S = 0.2
+# Direction presses of a group command use a single repeat (the
+# encoder double-sends it): ~0.4 s on air, like a physical remote.
+GROUP_MEMBER_FRAME_REPEATS = 1
 # Update cadence of the timed tilt estimate (56-bit tilt motors)
 _TILT_TIMED_TICK_S = 0.25
 # Poll cadence while waiting for a remote press to end
@@ -115,6 +123,21 @@ class PositionEstimator:
         else:
             position = self._start_position - elapsed_ms / self._close_time_ms * 100
         return int(_clamp(int(position)))
+
+    @property
+    def open_time_ms(self) -> int:
+        """Full-travel time of an upward move."""
+        return self._open_time_ms
+
+    @property
+    def close_time_ms(self) -> int:
+        """Full-travel time of a downward move."""
+        return self._close_time_ms
+
+    def set_travel_times(self, open_time_ms: int, close_time_ms: int) -> None:
+        """Change the travel times (a group derives them from members)."""
+        self._open_time_ms = max(open_time_ms, 100)
+        self._close_time_ms = max(close_time_ms, 100)
 
     @property
     def is_moving(self) -> bool:
@@ -337,6 +360,11 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
     @property
     def is_closing(self) -> bool | None:
         """Return whether the cover is closing."""
+        if self._is_group:
+            members = self._group_members()
+            if members:
+                closing = any(member.is_closing for member in members)
+                return closing if closing else None
         if not self._position_estimator.is_moving:
             return None
         return self._position_estimator.direction == "down"
@@ -344,6 +372,11 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
     @property
     def is_opening(self) -> bool | None:
         """Return whether the cover is opening."""
+        if self._is_group:
+            members = self._group_members()
+            if members:
+                opening = any(member.is_opening for member in members)
+                return opening if opening else None
         if not self._position_estimator.is_moving:
             return None
         return self._position_estimator.direction == "up"
@@ -454,6 +487,37 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
     # =====================================================================
     # Position (time-based estimate)
     # =====================================================================
+    async def _async_group_tick(self, members: list[SomfyRTSCover]) -> None:
+        """Drive a group movement from its members.
+
+        End stops: the motors run their full course, the movement
+        completes when the slowest member reaches the end. An
+        intermediate target (native My): the stop frame goes out once
+        every member estimate reached its target, then the member
+        estimates freeze with the group.
+        """
+        if not all(
+            member._position_estimator.reached_target()
+            for member in members
+        ):
+            self.async_write_ha_state()
+            self._notify_parent_groups()
+            return
+        target = self._position_estimator.target
+        if target not in (None, 0, 100):
+            # Intermediate target: the motors must be stopped on the air.
+            try:
+                await self._async_stop_at_target()
+            except HomeAssistantError as err:
+                _LOGGER.warning("Failed to stop %s: %s", self.entity_id, err)
+                self.async_write_ha_state()
+                return  # retry the stop frame on the next tick
+            self._stop_members_tracking()
+        self._position_estimator.stop()
+        self._stop_tracking()
+        self.async_write_ha_state()
+        self._notify_parent_groups()
+
     def _start_tracking(self) -> None:
         """Start periodic position updates while moving."""
         if self._cancel_timer is not None:
@@ -487,6 +551,11 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         if not self._position_estimator.is_moving:
             self._stop_tracking()
             return
+        if self._is_group:
+            members = self._group_members()
+            if members:
+                await self._async_group_tick(members)
+                return
         if self._shadow_tracking and self._position_estimator.reached_target():
             # Mirrored from a group command: the motor stopped with the
             # group, no radio from this member.
@@ -501,16 +570,23 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
                     await self._async_stop_at_target()
                 except HomeAssistantError as err:
                     _LOGGER.warning("Failed to stop %s: %s", self.entity_id, err)
+                if self._is_group:
+                    # The radio stop halts every member motor: freeze
+                    # the member estimates with the group.
+                    self._stop_members_tracking()
+            # End-stop targets need no stop frame: the motors run their
+            # full course, so mirrored members keep their own pace (their
+            # shadow tick stops them at their end stop). Freezing them
+            # here would cut their estimates mid-course.
             self._position_estimator.stop()
             self._stop_tracking()
-            if self._is_group:
-                self._stop_members_tracking()
         self.async_write_ha_state()
         self._notify_parent_groups()
 
     async def async_open_cover(self, **kwargs: Any) -> None:
         """Open the cover."""
         await self._async_send_command(SomfyCommand.UP)
+        self._anchor_group_estimate()
         self._position_estimator.start("up", 100)
         self._start_tracking()
         if self._is_group:
@@ -521,6 +597,7 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
     async def async_close_cover(self, **kwargs: Any) -> None:
         """Close the cover."""
         await self._async_send_command(SomfyCommand.DOWN)
+        self._anchor_group_estimate()
         self._position_estimator.start("down", 0)
         self._start_tracking()
         if self._is_group:
@@ -541,26 +618,56 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         self.async_write_ha_state()
         self._notify_parent_groups()
 
-    async def async_set_cover_position(self, **kwargs: Any) -> None:
+    async def async_set_cover_position(
+        self, frame_repeats: int | None = None, **kwargs: Any
+    ) -> None:
         """Move the cover to a specific position."""
         target = int(kwargs["position"])
         if self._invert_position:
             target = 100 - target  # the user thinks in "% closed"
+        if self._is_group:
+            members = self._group_members()
+            if members:
+                # A single group-address burst cannot land every
+                # motor on the same intermediate position: all the
+                # motors would hear the same stop frame and stop
+                # wherever each one happens to be. Command every
+                # member individually (Home Assistant CoverGroup /
+                # ESPSomfyRTS semantics for group positions).
+                for index, member in enumerate(members):
+                    display = (
+                        100 - target
+                        if member._invert_position
+                        else target
+                    )
+                    await member.async_set_cover_position(
+                        position=display,
+                        frame_repeats=GROUP_MEMBER_FRAME_REPEATS,
+                    )
+                    if index < len(members) - 1:
+                        # Hold out for the burst to clear the air
+                        # before queuing the next member.
+                        await asyncio.sleep(
+                            rf.press_air_time_s(
+                                SomfyCommand.UP,
+                                member._protocol,
+                                GROUP_MEMBER_FRAME_REPEATS,
+                            )
+                            + GROUP_MEMBER_FRAME_GAP_S
+                        )
+                self.async_write_ha_state()
+                self._notify_parent_groups()
+                return
         current = self._position_estimator.position
-        average = self._group_member_average()
-        if average is not None:
-            # A group moves from what it displays: the member average.
-            current = 100 - average if self._invert_position else average
         if target == current:
             return
         direction = "up" if target > current else "down"
         await self._async_send_command(
-            SomfyCommand.UP if direction == "up" else SomfyCommand.DOWN
+            SomfyCommand.UP if direction == "up" else SomfyCommand.DOWN,
+            frame_repeats=frame_repeats or DEFAULT_FRAME_REPEATS,
         )
         self._position_estimator.start(direction, target)
         self._start_tracking()
-        if self._is_group:
-            self._track_members_movement(direction, target)
         self.async_write_ha_state()
         self._notify_parent_groups()
 
@@ -630,6 +737,35 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         return round(
             sum(member.current_cover_position for member in members) / len(members)
         )
+
+    def _anchor_group_estimate(self) -> None:
+        """Anchor the group's own estimate on the members' average.
+
+        Member-level moves update the group's displayed position (the
+        average) but never its internal estimator, so a group command
+        starting from that stale value would reach its target
+        immediately and freeze the member estimates mid-course.
+
+        A group has no travel times of its own: they are derived
+        from the slowest live member, so the group paces its
+        estimate (and its radio stop on intermediate targets) like
+        the member that needs the longest run.
+        """
+        if not self._is_group:
+            return
+        members = self._group_members()
+        if not members:
+            return
+        estimator = self._position_estimator
+        estimator.set_travel_times(
+            max(m._position_estimator.open_time_ms for m in members),
+            max(m._position_estimator.close_time_ms for m in members),
+        )
+        average = self._group_member_average()
+        if average is None:
+            return
+        logical = 100 - average if self._invert_position else average
+        estimator.restore(logical)
 
     def _parent_groups(self) -> list[SomfyRTSCover]:
         """Live group entities this cover is a member of."""
@@ -892,6 +1028,7 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         if target == self.current_cover_position:
             return
         logical = 100 - target if self._invert_position else target
+        self._anchor_group_estimate()
         current = self._position_estimator.position
         self._position_estimator.start(
             "up" if logical > current else "down", logical
@@ -932,17 +1069,13 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         """
         start_position = self.current_cover_position
         if start_position <= 50:
-            travel_ms = int(
-                self._device_config.get(
-                    CONF_CLOSE_TIME_MS, DEFAULT_CLOSE_TIME_MS
-                )
-            )
             await self.async_close_cover()
+            # The estimator holds the configured travel time, or the
+            # slowest member's for a group (anchored by the move).
+            travel_ms = self._position_estimator.close_time_ms
         else:
-            travel_ms = int(
-                self._device_config.get(CONF_OPEN_TIME_MS, DEFAULT_OPEN_TIME_MS)
-            )
             await self.async_open_cover()
+            travel_ms = self._position_estimator.open_time_ms
         await asyncio.sleep(travel_ms / 1000 * 1.3 + 1)
         if self._is_group:
             self._stop_members_tracking()
