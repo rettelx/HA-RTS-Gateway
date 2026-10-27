@@ -16,6 +16,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
 
 from . import rf
 from .const import (
@@ -33,6 +35,28 @@ from .rx_handler import SomfyRTSRxHandler
 from .services import async_setup_services, async_unload_services
 
 _LOGGER = logging.getLogger(__name__)
+
+# Repair issue raised when the configured transmitter entity no
+# longer exists: the user must reconfigure or remove the entry.
+ISSUE_TRANSMITTER_MISSING = "transmitter_missing"
+
+
+def transmitter_missing_issue_id(transmitter_id: Any) -> str:
+    """Return the repair issue id of a transmitter."""
+    return f"{ISSUE_TRANSMITTER_MISSING}_{transmitter_id or 'unknown'}"
+
+
+@callback
+def _entity_registered(hass: HomeAssistant, transmitter_id: Any) -> bool:
+    """Return whether the transmitter entity exists in the registry.
+
+    The entity registry is loaded before config entries set up, so
+    an existing entity is registered even while its state is still
+    unavailable (the gateway is still connecting).
+    """
+    if not transmitter_id:
+        return False
+    return er.async_get(hass).async_get(str(transmitter_id)) is not None
 
 
 @dataclass
@@ -105,8 +129,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # in case a previous unload of the last entry removed them.
         await async_setup_services(hass)
 
-    if entry.data.get(CONF_TRANSMITTER_ID) not in rf.get_transmitters(hass):
+    transmitter_id = entry.data.get(CONF_TRANSMITTER_ID)
+    if transmitter_id not in rf.get_transmitters(hass):
+        if not _entity_registered(hass, transmitter_id):
+            # The transmitter entity is gone (gateway removed or
+            # renamed): a silent retry loop would never recover,
+            # raise a repair so the user acts on it. Registered but
+            # not available means the gateway is still connecting:
+            # keep the silent retry.
+            ir.async_create_issue(
+                hass,
+                DOMAIN,
+                transmitter_missing_issue_id(transmitter_id),
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=ISSUE_TRANSMITTER_MISSING,
+                translation_placeholders={
+                    "transmitter": str(transmitter_id or "unknown"),
+                },
+            )
         raise ConfigEntryNotReady("RF transmitter not available yet")
+
+    # The transmitter is back: clear any missing-transmitter repair.
+    ir.async_delete_issue(
+        hass, DOMAIN, transmitter_missing_issue_id(transmitter_id)
+    )
 
     # Per-entry runtime data lives on the entry itself; Home Assistant
     # clears it automatically when the entry is unloaded.

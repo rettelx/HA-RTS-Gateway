@@ -187,7 +187,8 @@
       }
     },
     "abort": {
-      "no_transmitters": "No compatible RF transmitter found. Set up an ESPHome device with a CC1101 (or OOK transmitter) and its radio_frequency entity first."
+      "no_transmitters": "No compatible RF transmitter found. Set up an ESPHome device with a CC1101 (or OOK transmitter) and its radio_frequency entity first.",
+      "already_configured": "A config entry for this RF transmitter already exists."
     },
     "error": {
       "invalid_address": "Address must be an 8-digit number between 00000000 and 16777215.",
@@ -744,6 +745,12 @@
           "description": "The group entity to unpair the covers from."
         }
       }
+    }
+  },
+  "issues": {
+    "transmitter_missing": {
+      "title": "The RF transmitter entity no longer exists",
+      "description": "The radio transmitter `{transmitter}` configured for this integration no longer exists. The gateway may have been removed, replaced or renamed. Reconfigure the integration and pick the new transmitter entity, or remove the integration if the gateway is gone."
     }
   }
 }

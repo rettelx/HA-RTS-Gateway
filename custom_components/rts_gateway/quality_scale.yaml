@@ -27,11 +27,7 @@ rules:
   runtime-data: done
   test-before-configure: done
   test-before-setup: done
-  unique-config-entry:
-    status: todo
-    comment: >-
-      The user step does not abort when an entry for the same
-      transmitter already exists.
+  unique-config-entry: done
 
   # Silver
   action-exceptions: done
@@ -82,12 +78,7 @@ rules:
   exception-translations: done
   icon-translations: done
   reconfiguration-flow: done
-  repair-issues:
-    status: todo
-    comment: >-
-      No repair issue is raised yet, for example when the RF
-      transmitter entity disappears or the rolling code store
-      fails to persist.
+  repair-issues: done
   stale-devices: done
 
   # Platinum

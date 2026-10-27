@@ -228,3 +228,53 @@ def test_unload_failure_returns_false(hass, fake_rf, monkeypatch):
         assert entry.entry_id in hass.data[DOMAIN]["loaded_entries"]
 
     asyncio.run(scenario())
+
+
+def test_setup_entry_repairs_missing_transmitter_entity(
+    hass, fake_rf, fake_issues, fake_entity_registry
+):
+    """Le transmetteur n'existe plus au registre : repair + retry."""
+    async def scenario():
+        assert await async_setup(hass, None) is True
+        entry = make_entry(transmitter="radio_frequency.deleted")
+        with pytest.raises(ConfigEntryNotReady):
+            await async_setup_entry(hass, entry)
+        assert fake_issues.created, "no repair issue raised"
+        assert (
+            fake_issues.created[-1]["issue_id"]
+            == "transmitter_missing_radio_frequency.deleted"
+        )
+        assert fake_issues.created[-1]["translation_key"] == (
+            "transmitter_missing"
+        )
+
+    asyncio.run(scenario())
+
+
+def test_setup_entry_no_repair_when_transmitter_registered(
+    hass, fake_rf, fake_issues, fake_entity_registry
+):
+    """Enregistre mais pas encore pret (demarrage) : pas de repair."""
+    async def scenario():
+        assert await async_setup(hass, None) is True
+        fake_entity_registry["radio_frequency.starting"] = object()
+        entry = make_entry(transmitter="radio_frequency.starting")
+        with pytest.raises(ConfigEntryNotReady):
+            await async_setup_entry(hass, entry)
+        assert fake_issues.created == []
+
+    asyncio.run(scenario())
+
+
+def test_setup_entry_clears_transmitter_repair(hass, fake_rf, fake_issues):
+    """Retour du transmetteur : le repair est supprime."""
+    async def scenario():
+        assert await async_setup(hass, None) is True
+        entry = make_entry()
+        assert await async_setup_entry(hass, entry) is True
+        assert (
+            "rts_gateway",
+            "transmitter_missing_radio_frequency.test_radio",
+        ) in fake_issues.deleted
+
+    asyncio.run(scenario())

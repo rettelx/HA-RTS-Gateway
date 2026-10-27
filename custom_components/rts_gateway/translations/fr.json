@@ -187,7 +187,8 @@
       }
     },
     "abort": {
-      "no_transmitters": "Aucun émetteur RF compatible trouvé. Configurez d'abord un appareil ESPHome avec un CC1101 (ou un émetteur OOK) et son entité radio_frequency."
+      "no_transmitters": "Aucun émetteur RF compatible trouvé. Configurez d'abord un appareil ESPHome avec un CC1101 (ou un émetteur OOK) et son entité radio_frequency.",
+      "already_configured": "Une entrée de configuration existe déjà pour ce transmetteur RF."
     },
     "error": {
       "invalid_address": "L'adresse doit être un nombre à 8 chiffres entre 00000000 et 16777215.",
@@ -744,6 +745,12 @@
           "description": "L'entité groupe de laquelle retirer les volets."
         }
       }
+    }
+  },
+  "issues": {
+    "transmitter_missing": {
+      "title": "L'entité transmetteur RF n'existe plus",
+      "description": "Le transmetteur radio `{transmitter}` configuré pour cette intégration n'existe plus. La passerelle a peut-être été supprimée, remplacée ou renommée. Reconfigurez l'intégration et choisissez la nouvelle entité transmetteur, ou supprimez l'intégration si la passerelle a disparu."
     }
   }
 }

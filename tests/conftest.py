@@ -35,6 +35,42 @@ def no_press_hold(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def fake_issues(monkeypatch):
+    """Back the issue registry helpers with recorders (all tests)."""
+    from homeassistant.helpers import issue_registry as ir
+
+    created: list = []
+    deleted: list = []
+
+    def _create(hass, domain, issue_id, **kwargs):
+        created.append({"domain": domain, "issue_id": issue_id, **kwargs})
+
+    def _delete(hass, domain, issue_id):
+        deleted.append((domain, issue_id))
+
+    monkeypatch.setattr(ir, "async_create_issue", _create)
+    monkeypatch.setattr(ir, "async_delete_issue", _delete)
+    from types import SimpleNamespace
+
+    return SimpleNamespace(created=created, deleted=deleted)
+
+
+@pytest.fixture(autouse=True)
+def fake_entity_registry(monkeypatch):
+    """Fake registry of the known entity ids."""
+    from homeassistant.helpers import entity_registry as er
+
+    entities: dict = {}
+
+    class _Registry:
+        def async_get(self, entity_id):
+            return entities.get(entity_id)
+
+    monkeypatch.setattr(er, "async_get", lambda hass: _Registry())
+    return entities
+
+
+@pytest.fixture(autouse=True)
 def no_member_frame_gap(monkeypatch):
     """Group member commands are spaced on air: no real sleeping.
 

@@ -260,26 +260,30 @@ QUALITY_SCALE_RULES = frozenset({
 
 EXEMPT_RULES = frozenset({
     "docs-conditions", "reauthentication-flow", "discovery",
-    "discovery-update-info", "inject-websession",
+    "discovery-update-info", "entity-disabled-by-default",
+    "inject-websession",
 })
 
 
 def test_quality_scale_yaml():
-    """quality_scale.yaml: checklist markdown verrouillee."""
-    with open(f"{COMPONENT_DIR}/quality_scale.yaml", encoding="utf-8") as fh:
-        lines = fh.read().splitlines()
-    found = set()
-    for line in lines:
-        match = re.match(r"- \[( |x)\] `(\w[-\w]*)`", line)
-        if not match:
-            continue
-        checked, rule = match.groups()
-        assert rule in QUALITY_SCALE_RULES, rule
-        found.add(rule)
-        # Chaque regle pointe vers le code qui l'implemente.
-        assert "](" in line, rule
-        if rule in EXEMPT_RULES:
-            assert "exempt" in line, rule
-        elif checked == " ":
-            assert rule in {"brands", "repair-issues"}, rule
-    assert found == QUALITY_SCALE_RULES, QUALITY_SCALE_RULES - found
+    """quality_scale.yaml: regles au format officiel, verrouillees."""
+    doc = _load_yaml("quality_scale.yaml")
+    assert set(doc) == {"rules"}, set(doc)
+    rules = doc["rules"]
+    assert set(rules) == QUALITY_SCALE_RULES, QUALITY_SCALE_RULES - set(rules)
+
+    exempt = set()
+    todo = set()
+    for rule, value in rules.items():
+        status = value if isinstance(value, str) else value.get("status")
+        assert status in {"done", "todo", "exempt"}, rule
+        if status == "exempt":
+            # Une exemption est une affirmation : le commentaire doit
+            # dire pourquoi, comme l'exige le format officiel.
+            assert isinstance(value, dict) and value.get("comment"), rule
+            exempt.add(rule)
+        elif status == "todo":
+            todo.add(rule)
+
+    assert exempt == EXEMPT_RULES, (EXEMPT_RULES ^ exempt)
+    assert todo <= {"brands"}, todo

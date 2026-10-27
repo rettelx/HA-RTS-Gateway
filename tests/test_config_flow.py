@@ -2151,3 +2151,37 @@ def test_device_type_labels_french(hass):
     assert "Portail" in group_labels
     assert "Prise On/Off" not in group_labels
     assert len(group_labels) == len(COVER_DEVICE_TYPES)
+
+
+def test_user_step_aborts_duplicate_transmitter(hass, fake_rf):
+    """Une deuxieme entree pour le meme transmetteur est refusee,
+
+    Le menu les filtre deja ; l'abort protege aussi les soumissions
+    directes et les courses entre deux flux.
+    """
+    from homeassistant.data_entry_flow import AbortFlow
+
+    async def scenario():
+        entry = FakeConfigEntry(
+            data={
+                "transmitter_id": TRANSMITTER,
+                "enable_rx": True,
+                "devices": [],
+                "sensors": [],
+            }
+        )
+        hass.config_entries.entries.append(entry)
+        # Un autre transmetteur reste disponible : sans lui l'etape
+        # aborte sur no_transmitters avant d'atteindre le mecanisme.
+        fake_rf.transmitters.append("radio_frequency.other")
+
+        flow = SomfyRTSConfigFlow()
+        flow.hass = hass
+        # The real flow manager sets .handler (the domain) on the
+        # instance; _async_current_entries reads it.
+        flow.handler = DOMAIN
+        with pytest.raises(AbortFlow) as exc:
+            await flow.async_step_user({"transmitter_id": TRANSMITTER})
+        assert exc.value.reason == "already_configured"
+
+    asyncio.run(scenario())

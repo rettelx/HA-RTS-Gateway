@@ -552,6 +552,11 @@ class SomfyRTSConfigFlow(ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             self._transmitter_id = user_input[CONF_TRANSMITTER_ID]
+            # The dropdown filters used transmitters, but a direct
+            # submission (or a race between two flows) must abort too.
+            self._async_abort_entries_match(
+                {CONF_TRANSMITTER_ID: self._transmitter_id}
+            )
             return await self.async_step_menu()
 
         return self.async_show_form(
