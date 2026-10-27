@@ -328,6 +328,24 @@ Every decoded frame also fires a `rts_gateway_frame` event with
 
 ---
 
+## 📋 Known limitations
+
+- **No motor feedback.** RTS only carries button presses: every
+  position is a time-based estimate. Full open and close commands
+  self-verify at the end stop, but anything in between drifts
+  slowly with each interrupted or unheard press. Schedule a nightly
+  `recalibrate` to re-anchor the estimate (see Position drift).
+- **A transmission can fail silently.** The ESPHome/CC1101 pair can
+  accept a command and radiate nothing (see the wiring warning in
+  `esphome.yaml`). The symptom: the integration logs the command,
+  the shutter does not move, and no `rts_gateway_frame` loopback
+  with `source: gateway` follows. Group commands already space
+  their bursts on air to stay reliable; if a shutter regularly
+  misses commands, check the CC1101 power supply, the antenna and
+  the two-pin wiring.
+
+---
+
 ## 🔎 Troubleshooting
 
 - **The shutter does not respond**: check that the gateway's

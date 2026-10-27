@@ -14,6 +14,7 @@ from homeassistant.components.cover import CoverDeviceClass, CoverEntityFeature
 from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.rts_gateway import cover as cover_module
+from custom_components.rts_gateway import rf
 from custom_components.rts_gateway.const import SomfyCommand
 from custom_components.rts_gateway.cover import PositionEstimator, SomfyRTSCover
 from custom_components.rts_gateway.rolling_code import RollingCodeStore
@@ -1258,7 +1259,7 @@ def test_tilt_tracking_superseded_quiet(hass, fake_rf, monkeypatch):
 # =============================================================================
 # Groupes : les commandes du groupe deplacent aussi les membres
 # =============================================================================
-def build_group_with_members(hass, **group_overrides):
+def build_group_with_members(hass, members_config=None, **group_overrides):
     """Un groupe et ses membres, enregistres dans une meme entree."""
     from conftest import make_runtime_data
 
@@ -1281,10 +1282,13 @@ def build_group_with_members(hass, **group_overrides):
     prepare_entity(group, "cover.groupe")
     entry.runtime_data.entities["cover.groupe"] = group
     members = []
-    for index, overrides in enumerate((
-        {},
-        {"open_time_ms": 500, "close_time_ms": 500},
-    )):
+    for index, overrides in enumerate(
+        members_config
+        or (
+            {},
+            {"open_time_ms": 500, "close_time_ms": 500},
+        )
+    ):
         member = SomfyRTSCover(
             hass,
             entry,
@@ -1302,6 +1306,137 @@ def build_group_with_members(hass, **group_overrides):
     return group, members
 
 
+
+
+def test_group_tick_waits_for_members(hass, fake_rf, no_timer, monkeypatch):
+    """Un tick avant la fin du membre le plus lent : le groupe attend."""
+    async def scenario():
+        group, members = build_group_with_members(hass)
+        for member in members:
+            member._position_estimator.restore(97)
+        group._position_estimator.restore(0)
+
+        base = 4096.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        await group.async_close_cover()
+
+        # Membre 0 (1 s) encore en course a +0,3 s : le groupe
+        # n'arrete rien et garde son mouvement en cours.
+        monkeypatch.setattr(time, "monotonic", lambda: base + 0.3)
+        await group._async_movement_tick(None)
+        assert group._position_estimator.is_moving is True
+        for member in members:
+            assert member._shadow_tracking is True
+
+    asyncio.run(scenario())
+
+
+def test_group_native_my_retries_stop_after_failure(
+    hass, fake_rf, no_timer, monkeypatch
+):
+    """MY natif : un STOP radio qui echoue est retente au tick suivant."""
+    from homeassistant.exceptions import HomeAssistantError
+
+    async def scenario():
+        group, members = build_group_with_members(
+            hass, simulate_my=False, my_position=40
+        )
+        for member in members:
+            member._my_position = 40
+            member._position_estimator.restore(90)
+            member._position_estimator.set_travel_times(1000, 1000)
+        group._position_estimator.restore(0)
+
+        real_send = rf.async_send_command
+        broken = True
+
+        async def flaky(hass, transmitter_id, address, command, code, **kw):
+            if broken and command == SomfyCommand.STOP:
+                raise HomeAssistantError("gateway down")
+            await real_send(hass, transmitter_id, address, command, code, **kw)
+
+        monkeypatch.setattr(rf, "async_send_command", flaky)
+
+        base = 4096.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        # Trame MY d'une telecommande : suivi natif, sans radio.
+        group.async_update_from_rx(SomfyCommand.MY, 500, "remote", 0, 1)
+        for member in members:
+            assert member._shadow_tracking is True
+
+        # Chaque membre atteint son favori (90 -> 40 en 0,5 s) et se
+        # fige tout seul a sa cible.
+        monkeypatch.setattr(time, "monotonic", lambda: base + 0.5)
+        for member in members:
+            await member._async_movement_tick(None)
+            assert member.current_cover_position == 40
+        assert len(fake_rf.sent) == 0  # aucun STOP parti sur l'air
+
+        # Le groupe veut arreter les moteurs : le STOP radio
+        # echoue, le mouvement reste actif pour retenter.
+        await group._async_movement_tick(None)
+        assert group._position_estimator.is_moving is True
+
+        # La radio revient : le STOP part et le groupe se fige.
+        broken = False
+        await group._async_movement_tick(None)
+        assert fake_rf.sent[-1]["command"] == "STOP"
+        assert group._position_estimator.is_moving is False
+        assert group.current_cover_position == 40
+
+    asyncio.run(scenario())
+
+
+def test_group_native_my_member_without_favorite(hass, fake_rf, no_timer, monkeypatch):
+    """MY natif du groupe : un membre sans favori ne bouge pas."""
+    async def scenario():
+        group, members = build_group_with_members(
+            hass, simulate_my=False, my_position=30
+        )
+        members[0]._my_position = 30
+        members[0]._position_estimator.restore(90)
+        members[1]._position_estimator.restore(90)
+        group._position_estimator.restore(0)
+
+        base = 4096.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        group.async_update_from_rx(SomfyCommand.MY, 500, "remote", 0, 1)
+        assert members[0]._shadow_tracking is True
+        assert members[1]._shadow_tracking is False
+        assert members[1].current_cover_position == 90
+
+    asyncio.run(scenario())
+
+
+def test_group_tilt_propagates_to_members(hass, fake_rf, no_timer, monkeypatch):
+    """Inclinaison du groupe : les membres suivent, s'arretent et se
+    realignent avec le groupe."""
+    monkeypatch.setattr(cover_module, "_TILT_TIMED_TICK_S", 0.01)
+
+    async def scenario():
+        group, members = build_group_with_members(
+            hass,
+            tilt=True,
+            members_config=({"tilt": True}, {"tilt": True}),
+        )
+
+        # Le groupe incline : chaque membre suit a son propre rythme.
+        await group.async_set_cover_tilt_position(tilt_position=40)
+        for member in members:
+            assert member._tilt_track is not None
+
+        # Stop : tout est annule, membres compris.
+        await group.async_stop_cover_tilt()
+        for member in members:
+            assert member._tilt_track is None
+            assert member._tilt_task is None
+
+        # Realignement : les membres sont poses sur la meme valeur.
+        group.async_set_current_tilt_position(25)
+        for member in members:
+            assert member.current_cover_tilt_position == 25
+
+    asyncio.run(scenario())
 def test_group_commands_move_members(hass, fake_rf, no_timer):
     """Ouvrir fermer le groupe : les membres suivent, sans radio propre."""
     async def scenario():

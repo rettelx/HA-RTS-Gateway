@@ -2185,3 +2185,51 @@ def test_user_step_aborts_duplicate_transmitter(hass, fake_rf):
         assert exc.value.reason == "already_configured"
 
     asyncio.run(scenario())
+
+
+def test_add_group_rejects_invalid_address(hass, fake_rf):
+    """Une adresse hors plage reservee aux groupes est refusee."""
+    async def scenario():
+        flow = SomfyRTSConfigFlow()
+        flow.hass = hass
+        flow.handler = DOMAIN
+        result = await flow.async_step_add_group(
+            {"name": "Groupe", "device_type": "roller_shutter", "address": "12"}
+        )
+        assert result["type"] == "form"
+        assert result["step_id"] == "add_group"
+        assert result["errors"]["address"] == "invalid_address"
+        assert flow._devices == []
+
+    asyncio.run(scenario())
+
+
+def test_add_group_rejects_used_address(hass, fake_rf):
+    """Une adresse deja prise par un appareil du flux est refusee."""
+    async def scenario():
+        flow = SomfyRTSConfigFlow()
+        flow.hass = hass
+        flow.handler = DOMAIN
+        flow._devices = [{"address": "01500000", "device_type": "roller_shutter"}]
+        result = await flow.async_step_add_group(
+            {"name": "Groupe", "device_type": "roller_shutter", "address": "01500000"}
+        )
+        assert result["type"] == "form"
+        assert result["errors"]["address"] == "address_in_use"
+        assert len(flow._devices) == 1
+
+    asyncio.run(scenario())
+
+
+def test_options_add_group_rejects_invalid_address(hass, fake_rf):
+    """Idem dans le flux de reconfiguration."""
+    async def scenario():
+        flow = SomfyRTSOptionsFlow()
+        flow.hass = hass
+        result = await flow.async_step_add_group(
+            {"name": "Groupe", "device_type": "roller_shutter", "address": "99"}
+        )
+        assert result["type"] == "form"
+        assert result["errors"]["address"] == "invalid_address"
+
+    asyncio.run(scenario())
