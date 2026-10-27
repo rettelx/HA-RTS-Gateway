@@ -332,7 +332,7 @@ def test_device_options_empty_fields_pair_directly(hass, fake_rf, monkeypatch):
     """Combinaison sans champs specifiques : appairage immediat (defensif)."""
     from custom_components.rts_gateway import config_flow as cf
 
-    monkeypatch.setattr(cf, "_device_option_fields", lambda device: {})
+    monkeypatch.setattr(cf, "_device_option_fields", lambda hass, device: {})
 
     async def scenario():
         # Flow de configuration.
@@ -353,7 +353,7 @@ def test_options_device_options_empty_fields_pair_directly(hass, fake_rf, monkey
     """Idem dans le flow de reconfiguration."""
     from custom_components.rts_gateway import config_flow as cf
 
-    monkeypatch.setattr(cf, "_device_option_fields", lambda device: {})
+    monkeypatch.setattr(cf, "_device_option_fields", lambda hass, device: {})
 
     async def scenario():
         entry = FakeConfigEntry(

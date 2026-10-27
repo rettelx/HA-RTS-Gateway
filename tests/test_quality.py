@@ -202,6 +202,7 @@ def test_device_option_fields_translated(strings, fr):
     for device_type in const.SomfyDeviceType:
         for protocol in const.SomfyProtocol:
             keys = config_flow._device_option_fields(
+                None,
                 {
                     const.CONF_DEVICE_TYPE: device_type.value,
                     const.CONF_PROTOCOL: protocol.value,

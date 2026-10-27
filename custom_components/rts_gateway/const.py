@@ -240,6 +240,24 @@ def device_type_label(hass: Any, device_type: SomfyDeviceType) -> str:
     return localized_label(hass, labels, device_type.value)
 
 
+# Stop methods, as shown in the device edit form
+STOP_METHOD_LABELS: dict[str, dict[str, str]] = {
+    STOP_METHOD_MY: {
+        "en": "MY (default)",
+        "fr": "MY (par défaut)",
+    },
+    STOP_METHOD_PULSE: {
+        "en": "Opposite pulse (motors without MY)",
+        "fr": "Impulsion opposée (moteurs sans MY)",
+    },
+}
+
+
+def stop_method_label(hass: Any, method: str) -> str:
+    """Localized label of a stop method."""
+    return localized_label(hass, STOP_METHOD_LABELS.get(method, {}), method)
+
+
 # =============================================================================
 # PLATFORMS
 # =============================================================================

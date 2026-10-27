@@ -67,6 +67,7 @@ from .const import (
     SomfyDeviceType,
     SomfyProtocol,
     device_type_label,
+    stop_method_label,
 )
 from .rolling_code import RollingCodeStore
 
@@ -146,7 +147,9 @@ def step_add_group_schema(hass: HomeAssistant) -> vol.Schema:
     )
 
 
-def _device_option_fields(device: dict[str, Any]) -> dict[Any, Any]:
+def _device_option_fields(
+    hass: HomeAssistant, device: dict[str, Any]
+) -> dict[Any, Any]:
     """Return the fields to show for a device, based on its type and
     protocol (used by both the add and the edit flows)."""
     fields: dict[Any, Any] = {}
@@ -187,8 +190,14 @@ def _device_option_fields(device: dict[str, Any]) -> dict[Any, Any]:
         ] = selector.SelectSelector(
             selector.SelectSelectorConfig(
                 options=[
-                    SelectOptionDict(value=STOP_METHOD_MY, label="MY (default)"),
-                    SelectOptionDict(value=STOP_METHOD_PULSE, label="Opposite pulse (motors without MY)"),
+                    SelectOptionDict(
+                        value=STOP_METHOD_MY,
+                        label=stop_method_label(hass, STOP_METHOD_MY),
+                    ),
+                    SelectOptionDict(
+                        value=STOP_METHOD_PULSE,
+                        label=stop_method_label(hass, STOP_METHOD_PULSE),
+                    ),
                 ],
                 mode=selector.SelectSelectorMode.LIST,
             )
@@ -948,7 +957,7 @@ class SomfyRTSConfigFlow(ConfigFlow, domain=DOMAIN):
             return await self.async_step_pair()
 
         assert self._pending_device is not None
-        fields = _device_option_fields(self._pending_device)
+        fields = _device_option_fields(self.hass, self._pending_device)
         if not fields:
             # Nothing specific to this combination: pair right away.
             self._pending_device = _finalize_device_options(
@@ -1158,7 +1167,7 @@ class SomfyRTSOptionsFlow(OptionsFlow):
                 )
             ),
         }
-        fields.update(_device_option_fields(device))
+        fields.update(_device_option_fields(self.hass, device))
         fields[
             vol.Optional(
                 CONF_LINKED_REMOTE_ADDRESSES,
@@ -1422,7 +1431,7 @@ class SomfyRTSOptionsFlow(OptionsFlow):
             return await self.async_step_pair()
 
         assert self._pending_device is not None
-        fields = _device_option_fields(self._pending_device)
+        fields = _device_option_fields(self.hass, self._pending_device)
         if not fields:
             # Nothing specific to this combination: pair right away.
             self._pending_device = _finalize_device_options(
