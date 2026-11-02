@@ -760,6 +760,40 @@ def test_rx_native_my_tracks_to_favorite(hass, no_timer, monkeypatch):
 
     asyncio.run(scenario())
 
+def test_rx_long_press_not_resolved_between_gateway_frames(hass, no_timer, monkeypatch):
+    """Regression: la passerelle deduplique a ~1,5 s, un appui long arrive
+    en trames espacees. La resolution ne doit PAS conclure 'appui court'
+    entre deux trames (sinon HA part vers l'ancienne favorite) ; a la fin
+    de l'appui, la position courante est memorisee."""
+    async def scenario():
+        monkeypatch.setattr(cover_module, "_PRESS_POLL_S", 0.01)
+        entity = build_cover(hass, my_position=45, simulate_my=True)
+        entity.async_set_current_position(27)
+
+        base = 1000.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 1)
+        task = entity._press_task
+        assert task is not None
+
+        # 1,6 s plus tard : trame suivante de la passerelle, l'appui continue.
+        monkeypatch.setattr(time, "monotonic", lambda: base + 1.6)
+        entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 2)
+        await asyncio.sleep(0)  # laisse la tache demarrer (horloge gelee)
+        assert not task.done()  # pas resolu entre deux trames
+        assert entity._my_position == 45  # pas de memorisation prematuree
+        assert not entity._position_estimator.is_moving  # pas parti vers 45
+
+        # Fin de l'appui : 2 s de silence -> resolution en appui long.
+        monkeypatch.setattr(time, "monotonic", lambda: base + 3.7)
+        await task
+        assert entity._my_position == 27  # position courante memorisee
+        assert entity._entry.data["devices"][0]["my_position"] == 27
+        assert entity.current_cover_position == 27  # le volet n'a pas "bouge"
+        assert not entity._position_estimator.is_moving
+
+    asyncio.run(scenario())
+
 def test_rx_long_my_by_duration_memorizes(hass, no_timer, monkeypatch):
     """Appui long detecte par sa duree (trames espacees par la dedup de la
     passerelle, comme en 56 bits reel) : la position courante devient la

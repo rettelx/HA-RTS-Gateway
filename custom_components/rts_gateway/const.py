@@ -146,8 +146,11 @@ TILT_STEP_INTERVAL_S = 0.75
 # press held down repeats the same frame on air; this many repeats or
 # more mark a long press.
 TILT_PRESS_REPEATS = 15
-# Silence after the last repeated frame before a press is resolved.
-TILT_PRESS_END_S = 0.5
+# Silence after the last frame of a press before it is resolved. Must
+# exceed the gateway's dedup window (~1.5 s): a long press is forwarded
+# as frames spaced by ~1.5 s, and the press must stay pending between
+# them instead of being resolved as a short press after the first frame.
+TILT_PRESS_END_S = 2.0
 # Minimum on-air span of a press (first to last forwarded frame) for it
 # to count as a long press. The gateway dedups repeats within 1.5 s, so
 # a long press arrives as a few frames spaced by ~1.5 s, while a short
