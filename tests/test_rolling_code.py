@@ -55,3 +55,24 @@ def test_corrupted_storage_is_reset(hass, fake_store):
         assert fake_store._bank["rts_gateway.rolling_codes"]["devices"]["42"] == {"counter": 10}
 
     asyncio.run(scenario())
+
+
+def test_concurrent_get_next_returns_unique_codes(hass, fake_store, monkeypatch):
+    """Regression: concurrent consumers never get the same rolling code
+    (mutations are serialized by a lock)."""
+    async def scenario():
+        store = RollingCodeStore(hass)
+        # Force a yield on every load so concurrent calls interleave.
+        original_load = store._async_load
+
+        async def slow_load():
+            await asyncio.sleep(0)
+            return await original_load()
+
+        monkeypatch.setattr(store, "_async_load", slow_load)
+
+        codes = await asyncio.gather(*[store.async_get_next(42) for _ in range(50)])
+        assert sorted(codes) == list(range(1, 51))
+        assert await store.async_get(42) == 51
+
+    asyncio.run(scenario())

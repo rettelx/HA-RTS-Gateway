@@ -11,6 +11,7 @@ address is used.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -32,6 +33,10 @@ class RollingCodeStore:
         self._hass = hass
         self._store = Store[dict[str, Any]](hass, STORAGE_VERSION, STORAGE_KEY)
         self._data: dict[str, Any] | None = None
+        # Mutations (consume / set / remove) are serialized: two
+        # concurrent transmissions on the same address must never
+        # consume the same rolling code.
+        self._lock = asyncio.Lock()
 
     async def _async_load(self) -> dict[str, Any]:
         """Load storage data once."""
@@ -49,25 +54,28 @@ class RollingCodeStore:
 
     async def async_get_next(self, address: int) -> int:
         """Consume and persist the next rolling code for an address."""
-        data = await self._async_load()
-        counter = int(
-            data["devices"].get(str(address), {}).get(
-                "counter", DEFAULT_STARTING_COUNTER
+        async with self._lock:
+            data = await self._async_load()
+            counter = int(
+                data["devices"].get(str(address), {}).get(
+                    "counter", DEFAULT_STARTING_COUNTER
+                )
             )
-        )
-        data["devices"][str(address)] = {"counter": counter + 1}
-        await self._store.async_save(data)
+            data["devices"][str(address)] = {"counter": counter + 1}
+            await self._store.async_save(data)
         _LOGGER.debug("Rolling code %d consumed for address %d", counter, address)
         return counter
 
     async def async_set(self, address: int, counter: int) -> None:
         """Force the counter for an address (e.g. after re-pairing)."""
-        data = await self._async_load()
-        data["devices"][str(address)] = {"counter": counter}
-        await self._store.async_save(data)
+        async with self._lock:
+            data = await self._async_load()
+            data["devices"][str(address)] = {"counter": counter}
+            await self._store.async_save(data)
 
     async def async_remove(self, address: int) -> None:
         """Forget an address."""
-        data = await self._async_load()
-        data["devices"].pop(str(address), None)
-        await self._store.async_save(data)
+        async with self._lock:
+            data = await self._async_load()
+            data["devices"].pop(str(address), None)
+            await self._store.async_save(data)
