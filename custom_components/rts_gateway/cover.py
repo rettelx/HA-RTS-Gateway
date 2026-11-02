@@ -1067,14 +1067,15 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         if self._is_group:
             self._track_members_native_my()
 
-    def _memorize_my_position_from_rx(self) -> None:
-        """Record the current position as the My favorite (long MY press
+    def _memorize_my_position_from_rx(self, position: int) -> None:
+        """Record the given position as the My favorite (long MY press
         received from a remote).
 
-        The motor memorizes its current physical position; HA's best
-        estimate of it is the current position. Persisted on the entry.
+        The motor memorizes its physical position when the press started
+        (a long MY stops a moving motor first, then memorizes); HA
+        captures the estimate at press start. Persisted on the entry.
         """
-        position = self.current_cover_position  # display scale
+        position = _clamp(int(position))  # display scale
         self.async_set_my_position(position)
         entry = self._entry
         devices = [dict(d) for d in entry.data.get(CONF_DEVICES, [])]
@@ -1084,8 +1085,10 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         self._hass.config_entries.async_update_entry(
             entry, data={**entry.data, CONF_DEVICES: devices}
         )
-        # Memorizing does not move the motor: freeze the estimate.
-        self._position_estimator.stop()
+        # Memorizing does not move the motor: re-anchor the estimate on
+        # the position captured when the press started.
+        logical = 100 - position if self._invert_position else position
+        self._position_estimator.restore(logical)
         self._stop_tracking()
         if self._is_group:
             self._stop_members_tracking()
@@ -1173,6 +1176,9 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
             "count": repeat,
             "first_seen": now,
             "last_seen": now,
+            # Position when the press started: a long MY press does not
+            # move the motor, so this is the position it memorizes.
+            "position": self.current_cover_position,
         }
         self._press_task = self._hass.async_create_task(
             self._async_resolve_press()
@@ -1198,7 +1204,7 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
             if is_long:
                 # Long MY = memorize: the motor records its current
                 # position as the new favorite; HA mirrors and persists it.
-                self._memorize_my_position_from_rx()
+                self._memorize_my_position_from_rx(press["position"])
             elif (
                 self._my_position is not None
                 and not self._position_estimator.is_moving

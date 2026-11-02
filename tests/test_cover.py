@@ -760,6 +760,32 @@ def test_rx_native_my_tracks_to_favorite(hass, no_timer, monkeypatch):
 
     asyncio.run(scenario())
 
+def test_rx_long_my_memorizes_press_start_position(hass, no_timer, monkeypatch):
+    """Regression: la memorisation enregistre la position au DEBUT de
+    l'appui, pas l'estimation a la fin (qui a pu diverger entre-temps)."""
+    async def scenario():
+        monkeypatch.setattr(cover_module, "TILT_PRESS_END_S", 0.05)
+        monkeypatch.setattr(cover_module, "_PRESS_POLL_S", 0.01)
+        entity = build_cover(hass, my_position=59, simulate_my=False)
+        entity.async_set_current_position(10)
+
+        base = 1000.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 1)
+        # Pendant l'appui, l'estimation a derive (ex. resolution prematuree).
+        entity._position_estimator.start("up", 59)
+        monkeypatch.setattr(time, "monotonic", lambda: base + 1.6)
+        entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 2)
+        monkeypatch.setattr(time, "monotonic", lambda: base + 1.7)
+        await entity._press_task
+
+        assert entity._my_position == 10  # position de debut d'appui
+        assert entity._entry.data["devices"][0]["my_position"] == 10
+        assert entity.current_cover_position == 10  # estimation re-anchree
+        assert not entity._position_estimator.is_moving
+
+    asyncio.run(scenario())
+
 def test_rx_long_press_not_resolved_between_gateway_frames(hass, no_timer, monkeypatch):
     """Regression: la passerelle deduplique a ~1,5 s, un appui long arrive
     en trames espacees. La resolution ne doit PAS conclure 'appui court'
@@ -784,8 +810,8 @@ def test_rx_long_press_not_resolved_between_gateway_frames(hass, no_timer, monke
         assert entity._my_position == 45  # pas de memorisation prematuree
         assert not entity._position_estimator.is_moving  # pas parti vers 45
 
-        # Fin de l'appui : 2 s de silence -> resolution en appui long.
-        monkeypatch.setattr(time, "monotonic", lambda: base + 3.7)
+        # Fin de l'appui : silence >= TILT_PRESS_END_S (2,5 s) -> resolution.
+        monkeypatch.setattr(time, "monotonic", lambda: base + 4.2)
         await task
         assert entity._my_position == 27  # position courante memorisee
         assert entity._entry.data["devices"][0]["my_position"] == 27
