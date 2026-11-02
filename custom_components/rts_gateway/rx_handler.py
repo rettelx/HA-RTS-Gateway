@@ -97,21 +97,6 @@ class SomfyRTSRxHandler:
         """Forward a frame to all matching covers and fire an event."""
         now = time.monotonic()
 
-        # Ignore loopback of our own transmissions (the gateway's CC1101
-        # hears the frames Home Assistant sends).
-        recent_tx = self._hass.data.get(DOMAIN, {}).get("recent_tx", {})
-        sent_at = recent_tx.get((address, rolling_code))
-        if sent_at is not None and now - sent_at < TX_LOOPBACK_TTL:
-            self._fire_frame_event(
-                address, command, rolling_code, device, step, bits,
-                command_code, source="gateway",
-            )
-            return
-        if len(recent_tx) > 256:
-            for key, ts in list(recent_tx.items()):
-                if now - ts >= TX_LOOPBACK_TTL:
-                    del recent_tx[key]
-
         # Every RTS press is repeated on air several times with the same
         # rolling code. The first frame fires the event; the repeats are
         # only forwarded to the covers, with their count (long-press
@@ -133,10 +118,26 @@ class SomfyRTSRxHandler:
                     k: c for k, c in self._press_counts.items() if k in self._last_frames
                 }
 
+        recent_tx = self._hass.data.get(DOMAIN, {}).get("recent_tx", {})
+        if len(recent_tx) > 256:
+            for k, ts in list(recent_tx.items()):
+                if now - ts >= TX_LOOPBACK_TTL:
+                    del recent_tx[k]
+
+        # Loopback of our own transmissions (the gateway's CC1101 hears
+        # the frames Home Assistant sends): the frame is reported once per
+        # press like a remote frame, but never forwarded to the entities.
+        sent_at = recent_tx.get(key)
+        is_loopback = sent_at is not None and now - sent_at < TX_LOOPBACK_TTL
+
+        if repeat == 1:
             self._fire_frame_event(
                 address, command, rolling_code, device, step, bits,
-                command_code, source="remote",
+                command_code, source="gateway" if is_loopback else "remote",
             )
+        if is_loopback:
+            return
+        if repeat == 1:
             self._seen[address] = {
                 "time": now,
                 "command": command.value if command is not None else "?",
@@ -218,7 +219,10 @@ class SomfyRTSRxHandler:
             step = int(str(data.get("step", 0)))
         except (TypeError, ValueError):
             step = 0
-        bits = int(str(data.get("bits", 56)))
+        try:
+            bits = int(str(data.get("bits", 56)))
+        except (TypeError, ValueError):
+            bits = 56
         self._dispatch(
             address,
             BUTTON_TO_COMMAND.get(command),

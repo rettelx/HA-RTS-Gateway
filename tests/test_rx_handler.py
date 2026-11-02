@@ -327,3 +327,36 @@ def test_duplicate_maps_are_pruned(hass):
     assert len(handler._last_frames) <= 2
     assert (1000, 5) not in handler._press_counts
     entity.async_update_from_rx.assert_called()
+
+
+def test_frame_event_gateway_loopback_fired_once_per_press(hass):
+    """Regression: repeated loopback frames fire a single gateway event."""
+    from custom_components.rts_gateway.const import EVENT_FRAME
+
+    entity = make_entity(address_int=1000)
+    handler = make_handler(hass, entities=[entity])
+    recent_tx = hass.data[DOMAIN].setdefault("recent_tx", {})
+    recent_tx[(1000, 5)] = time.monotonic()
+
+    fire(handler, address=1000, command=2, rolling_code=5)
+    fire(handler, address=1000, command=2, rolling_code=5)
+    fire(handler, address=1000, command=2, rolling_code=5)
+
+    events = [e for e in hass.bus.events if e["type"] == EVENT_FRAME]
+    assert len(events) == 1
+    assert events[0]["data"]["source"] == "gateway"
+    entity.async_update_from_rx.assert_not_called()
+
+
+def test_malformed_bits_falls_back_to_56(hass):
+    """Un champ bits non numerique ne fait pas planter le listener."""
+    from custom_components.rts_gateway.const import EVENT_FRAME
+
+    handler = make_handler(hass, entities=[])
+    handler._handle_event(
+        Event(RX_EVENT, {"address": "1000", "command": "2",
+                         "rolling_code": "5", "bits": "bad"})
+    )
+    events = [e for e in hass.bus.events if e["type"] == EVENT_FRAME]
+    assert len(events) == 1
+    assert events[0]["data"]["bits"] == 56
