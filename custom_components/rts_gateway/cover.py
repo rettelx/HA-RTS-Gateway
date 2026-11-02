@@ -15,7 +15,7 @@ from homeassistant.components.cover import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_time_interval
@@ -984,6 +984,12 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
 
     async def async_goto_my_position(self) -> None:
         """Move the cover to its configured My (favorite) position."""
+        if self._my_position is None:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="my_position_not_set",
+                translation_placeholders={"entity_id": self.entity_id},
+            )
         if not self._simulate_my:
             # Native mode: the motor goes to its own memorized
             # favorite position when it hears MY.

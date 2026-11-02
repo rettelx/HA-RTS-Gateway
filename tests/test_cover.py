@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fakes import FakeConfigEntry, make_device, prepare_entity
 from homeassistant.components.cover import CoverDeviceClass, CoverEntityFeature
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from custom_components.rts_gateway import cover as cover_module
 from custom_components.rts_gateway import rf
