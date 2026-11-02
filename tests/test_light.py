@@ -231,3 +231,12 @@ def test_step_dim_zero_delta_is_noop(hass, fake_rf, no_timer):
 
 
     asyncio.run(scenario())
+
+
+def test_rx_update_accepts_repeat_argument(hass):
+    """Regression: the RX handler forwards every frame with its repeat count."""
+    entity = build_light(hass)
+    entity.async_update_from_rx(SomfyCommand.MY, 1, "remote", 0, 2)
+    assert entity.is_on is True
+    entity.async_update_from_rx(SomfyCommand.STEP_DOWN, 2, "remote", 0, 2)
+    assert entity.brightness < 255

@@ -266,6 +266,7 @@ class SomfyRTSLight(TransmitterAvailabilityMixin, LightEntity, RestoreEntity):
         rolling_code: int,
         device: str | None,
         step: int = 0,
+        repeat: int = 1,
     ) -> None:
         """Update the state when a linked remote controls the receiver."""
         self._last_rx_device = device

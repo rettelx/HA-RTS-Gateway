@@ -121,3 +121,10 @@ def test_switch_restore_and_remove(hass):
         assert "switch.test" not in registry
 
     asyncio.run(scenario())
+
+
+def test_rx_update_accepts_repeat_argument(hass):
+    """Regression: the RX handler forwards every frame with its repeat count."""
+    entity = build_switch(hass, toggle_command="UP")
+    entity.async_update_from_rx(SomfyCommand.UP, 1, "remote", 0, 3)
+    assert entity.is_on is True
