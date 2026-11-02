@@ -176,9 +176,10 @@ def test_manifest_quality_keys():
 
 
 def test_hacs_brand_assets():
-    """HACS listing icons: a brand directory with an icon.png."""
-    assert (REPO_ROOT / "brand" / "icon.png").is_file()
-    assert (REPO_ROOT / "brand" / "icon@2x.png").is_file()
+    """Brand assets staged for home-assistant/brands: icon and logo."""
+    brand = REPO_ROOT / COMPONENT_DIR / "brand"
+    for name in ("icon.png", "icon@2x.png", "logo.png", "logo@2x.png"):
+        assert (brand / name).is_file(), name
 
 
 def test_data_descriptions_match_field_names(strings, fr):
