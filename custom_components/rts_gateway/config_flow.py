@@ -2083,13 +2083,21 @@ class SomfyRTSOptionsFlow(OptionsFlow):
         if user_input is not None:
             self._apply_edits()
             entry = self.config_entry
-            self.hass.config_entries.async_update_entry(
-                entry,
-                data={
-                    **entry.data,
-                    CONF_TRANSMITTER_ID: user_input[CONF_TRANSMITTER_ID],
-                },
-            )
+            new_transmitter = user_input[CONF_TRANSMITTER_ID]
+            data = dict(entry.data)
+            data[CONF_TRANSMITTER_ID] = new_transmitter
+            # Devices and sensors carry their own transmitter id (the
+            # entities read it from their device config): keep them in
+            # sync, like the reconfigure flow does.
+            data[CONF_DEVICES] = [
+                {**d, CONF_TRANSMITTER_ID: new_transmitter}
+                for d in entry.data.get(CONF_DEVICES, [])
+            ]
+            data[CONF_SENSORS] = [
+                {**s, CONF_TRANSMITTER_ID: new_transmitter}
+                for s in entry.data.get(CONF_SENSORS, [])
+            ]
+            self.hass.config_entries.async_update_entry(entry, data=data)
             return self.async_create_entry(title="", data=dict(entry.options or {}))
 
         transmitters = rf.get_transmitters(self.hass)

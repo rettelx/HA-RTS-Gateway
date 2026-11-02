@@ -1135,8 +1135,8 @@ def test_change_transmitter(hass, fake_rf):
             data={
                 "transmitter_id": "radio_frequency.old_id",
                 "enable_rx": True,
-                "devices": [make_device()],
-                "sensors": [],
+                "devices": [make_device(transmitter_id="radio_frequency.old_id")],
+                "sensors": [{"name": "S", "address": "11112222", "transmitter_id": "radio_frequency.old_id"}],
             }
         )
         hass.config_entries.entries.append(entry)
@@ -1156,6 +1156,10 @@ def test_change_transmitter(hass, fake_rf):
         })
         assert result["type"] == "create_entry"
         assert entry.data["transmitter_id"] == "radio_frequency.test_radio"
+        # Devices and sensors carry their own transmitter id: it must
+        # follow, otherwise the entities keep transmitting on the old one.
+        assert entry.data["devices"][0]["transmitter_id"] == "radio_frequency.test_radio"
+        assert entry.data["sensors"][0]["transmitter_id"] == "radio_frequency.test_radio"
         assert hass.config_entries.updated[-1][0] is entry
 
     asyncio.run(scenario())
