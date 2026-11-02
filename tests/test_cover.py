@@ -724,6 +724,18 @@ def test_stop_method_my_sends_my(hass, fake_rf, no_timer):
     asyncio.run(scenario())
 
 
+def test_rx_my_while_moving_is_a_stop(hass, no_timer):
+    """MY recu pendant un mouvement = STOP (bouton unique 0x1 en 56 bits) :
+    l'estimation se gele, pas de suivi vers la favorite."""
+    entity = build_cover(hass, my_position=30, simulate_my=False)
+    entity.async_update_from_rx(SomfyCommand.UP, 9, "remote", 0, 1)
+    assert entity.is_opening is True
+
+    entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 1)
+    assert entity.is_opening is None  # gele
+    assert entity._position_estimator.target is None  # pas de cible favorite
+
+
 def test_rx_native_my_tracks_to_favorite(hass, no_timer):
     """MY court recu en natif : suivi vers my_position, pas de freeze."""
     entity = build_cover(hass, my_position=30, simulate_my=False)
