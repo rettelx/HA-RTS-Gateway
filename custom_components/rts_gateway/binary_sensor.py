@@ -111,6 +111,7 @@ class SomfyRTSSensor(TransmitterAvailabilityMixin, BinarySensorEntity):
 
     async def async_added_to_hass(self) -> None:
         """Register the entity."""
+        await super().async_added_to_hass()
         registry = self._entry.runtime_data.sensors
         registry[(self._address_int, self._kind)] = self
 
@@ -118,6 +119,7 @@ class SomfyRTSSensor(TransmitterAvailabilityMixin, BinarySensorEntity):
         """Unregister the entity."""
         registry = self._entry.runtime_data.sensors
         registry.pop((self._address_int, self._kind), None)
+        await super().async_will_remove_from_hass()
 
     def async_update_from_rx(self, payload: int, device: str | None) -> None:
         """Update the alarm from a received sensor frame."""
