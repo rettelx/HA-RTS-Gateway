@@ -1704,3 +1704,41 @@ def test_group_position_averages_members(hass, fake_rf, no_timer, monkeypatch):
         assert group.is_closed
 
     asyncio.run(scenario())
+
+
+def test_group_rx_down_and_steps_propagate(hass, fake_rf, no_timer):
+    """Trames DOWN / STEP recues sur le groupe se refletent sur les membres."""
+    group, members = build_group_with_members(
+        hass, device_type="blind", protocol="rts_80bit", tilt=True,
+    )
+    for member in members:
+        member._tilt_supported = True
+        member._tilt_timed = False
+
+    group.async_update_from_rx(SomfyCommand.DOWN, 5, None)
+    for member in members:
+        assert member.is_closing
+        assert member._shadow_tracking is True
+
+    group.async_update_from_rx(SomfyCommand.STEP_UP, 6, None, 5)
+    assert group.current_cover_tilt_position == 7
+    for member in members:
+        assert member.current_cover_tilt_position == 7
+
+    group.async_update_from_rx(SomfyCommand.STEP_DOWN, 7, None, 5)
+    assert group.current_cover_tilt_position == 0
+    for member in members:
+        assert member.current_cover_tilt_position == 0
+
+def test_goto_my_position_without_position_raises(hass, fake_rf, no_timer):
+    """Regression: no My position configured -> clean validation error,
+    no radio frame, no bare TypeError."""
+    async def scenario():
+        entity = build_cover(hass)  # no my_position configured
+        await entity.async_added_to_hass()
+        with pytest.raises(ServiceValidationError) as err:
+            await entity.async_goto_my_position()
+        assert err.value.translation_key == "my_position_not_set"
+        assert fake_rf.sent == []
+
+    asyncio.run(scenario())

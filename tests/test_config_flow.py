@@ -2237,3 +2237,237 @@ def test_options_add_group_rejects_invalid_address(hass, fake_rf):
         assert result["errors"]["address"] == "invalid_address"
 
     asyncio.run(scenario())
+
+
+# =============================================================================
+# Navigation des menus (les etapes sont pilotees directement, comme le
+# fait le frontend HA : chaque option de menu appelle async_step_<option>)
+# =============================================================================
+def test_config_menu_dispatches_every_option(hass, fake_rf, flow):
+    async def scenario():
+        result = await flow.async_step_user({"transmitter_id": TRANSMITTER})
+        assert result["type"] == "menu"
+        assert result["menu_options"] == [
+            "add_device", "add_group", "add_sensor", "manage_group", "done"
+        ]
+
+        # Chaque option de menu ouvre son formulaire.
+        result = await flow.async_step_add_device(None)
+        assert result["type"] == "form" and result["step_id"] == "add_device"
+        result = await flow.async_step_add_group(None)
+        assert result["type"] == "form" and result["step_id"] == "add_group"
+        result = await flow.async_step_add_sensor(None)
+        assert result["type"] == "form" and result["step_id"] == "add_sensor"
+
+        # Sans groupe, "manage_group" retourne au menu.
+        result = await flow.async_step_manage_group(None)
+        assert result["type"] == "menu" and result["step_id"] == "menu"
+
+        # "done" cree l'entree.
+        result = await flow.async_step_done(None)
+        assert result["type"] == "create_entry"
+        assert result["data"]["transmitter_id"] == TRANSMITTER
+
+    asyncio.run(scenario())
+
+
+def test_options_init_menu_dispatches_every_option(hass, fake_rf):
+    async def scenario():
+        entry = _make_entry(
+            hass, [make_device(linked_remote_addresses=["00500002"])]
+        )
+        flow = _make_options_flow(hass, entry)
+
+        result = await flow.async_step_init(None)
+        assert result["type"] == "menu"
+
+        # Chaque option ouvre son formulaire (ou son sous-menu).
+        for step, expected in [
+            ("general", "general"),
+            ("transmitter", "transmitter"),
+            ("add_device", "add_device"),
+            ("edit_device", "edit_device"),
+            ("remove_device", "remove_device"),
+            ("add_group", "add_group"),
+            ("add_remote", "add_remote"),
+        ]:
+            result = await getattr(flow, f"async_step_{step}")(None)
+            assert result["type"] == "form" and result["step_id"] == expected, step
+
+        # Le device a une telecommande liee : le formulaire de choix s'ouvre.
+        result = await flow.async_step_remove_remote(None)
+        assert result["step_id"] == "remove_remote"
+        result = await flow.async_step_remove_remote({"device_index": "0"})
+        assert result["step_id"] == "remove_remote_confirm"
+
+        # Sans groupe, "manage_group" et "remove_group" retournent au menu.
+        for step in ("manage_group", "remove_group"):
+            result = await getattr(flow, f"async_step_{step}")(None)
+            assert result["type"] == "menu" and result["step_id"] == "init", step
+
+        # "done" termine le flux d'options.
+        result = await flow.async_step_done(None)
+        assert result["type"] == "create_entry"
+
+    asyncio.run(scenario())
+
+
+def test_edit_device_params_accepts_sectioned_payload(hass, fake_rf):
+    """Le formulaire groupe les champs en sections : le payload soumis
+    est imbrique, il doit etre aplati avant persistance."""
+    async def scenario():
+        entry = _make_entry(hass, [make_device()])
+        flow = _make_options_flow(hass, entry)
+
+        result = await flow.async_step_edit_device({"device_index": "0"})
+        assert result["step_id"] == "edit_device_params"
+
+        # Payload tel que le frontend le soumet (sections imbriquees).
+        result = await flow.async_step_edit_device_params({
+            "name": "Volet renommé",
+            "movement": {"open_time_ms": 21000, "close_time_ms": 22000},
+            "position": {
+                "invert": True,
+                "invert_position": False,
+                "my_position": 60,
+                "simulate_my": True,
+                "stop_method": "my",
+            },
+            "remotes": {"linked_remote_addresses": ["00500002"]},
+        })
+        assert result["step_id"] == "edit_device"
+
+        device = entry.data["devices"][0]
+        assert device["name"] == "Volet renommé"
+        assert device["open_time_ms"] == 21000
+        assert device["close_time_ms"] == 22000
+        assert device["invert"] is True
+        assert device["my_position"] == 60
+        assert device["linked_remote_addresses"] == ["00500002"]
+
+    asyncio.run(scenario())
+
+
+def test_add_group_generates_address_when_empty(hass, fake_rf, flow):
+    """Sans adresse saisie, un groupe recoit une adresse de la plage reservee."""
+    async def scenario():
+        result = await flow.async_step_add_group({
+            "name": "Groupe",
+            "device_type": "roller_shutter",
+        })
+        assert result["type"] == "menu"
+        address = flow._devices[0]["address"]
+        assert len(address) == 8
+        assert 1000000 <= int(address) <= 2097151
+        assert flow._devices[0]["is_group"] is True
+
+    asyncio.run(scenario())
+
+
+def test_options_add_group_generates_address_when_empty(hass, fake_rf):
+    async def scenario():
+        entry = _make_entry(hass, [make_device(address="10000001")])
+        flow = _make_options_flow(hass, entry)
+
+        result = await flow.async_step_add_group({
+            "name": "Groupe",
+            "device_type": "roller_shutter",
+        })
+        # Le wizard enchaine sur le choix des membres.
+        assert result["step_id"] == "manage_group_members"
+        address = entry.data["devices"][-1]["address"]
+        assert len(address) == 8
+        assert 1000000 <= int(address) <= 2097151
+
+    asyncio.run(scenario())
+
+
+def _group_device(address="01500000"):
+    return {
+        "name": "Groupe",
+        "address": address,
+        "device_type": "roller_shutter",
+        "transmitter_id": TRANSMITTER,
+        "protocol": "rts_56bit",
+        "is_group": True,
+    }
+
+
+def test_config_manage_group_no_changes_returns_to_menu(hass, fake_rf, flow):
+    """Sans changement de membres, le wizard retourne au menu."""
+    async def scenario():
+        flow._transmitter_id = TRANSMITTER
+        member = make_device(name="Volet", address="10000001")
+        member["group_addresses"] = ["01500000"]
+        flow._devices = [_group_device(), member]
+
+        result = await flow.async_step_manage_group({"device_index": "0"})
+        assert result["step_id"] == "manage_group_members"
+        # La selection courante est re-soumise telle quelle : rien a faire.
+        result = await flow.async_step_manage_group_members({"device_index": ["1"]})
+        assert result["type"] == "menu" and result["step_id"] == "menu"
+        assert fake_rf.sent == []
+
+    asyncio.run(scenario())
+
+
+def test_config_manage_group_member_wizard(hass, fake_rf, flow, monkeypatch):
+    """Wizard d'ajout de membres (flux initial) : erreurs puis succes."""
+    async def scenario():
+        flow._transmitter_id = TRANSMITTER
+        flow._devices = [
+            _group_device(),
+            make_device(name="Volet A", address="10000001"),
+            make_device(name="Volet B", address="10000002"),
+        ]
+
+        result = await flow.async_step_manage_group({"device_index": "0"})
+        result = await flow.async_step_manage_group_members(
+            {"device_index": ["1", "2"]}
+        )
+        assert result["step_id"] == "member_memory"
+
+        # Refus de confirmer le jog : erreur, appui long renvoye.
+        result = await flow.async_step_member_memory({"jogged": False})
+        assert result["errors"]["base"] == "memory_not_opened"
+
+        # Echec de transmission du PROG de groupe.
+        async def _fail(*args, **kwargs):
+            raise HomeAssistantError("boom")
+
+        original = config_flow.async_send_prog_press
+        monkeypatch.setattr(config_flow, "async_send_prog_press", _fail)
+        result = await flow.async_step_member_memory({"jogged": True})
+        assert result["errors"]["base"] == "transmission_failed"
+        monkeypatch.setattr(config_flow, "async_send_prog_press", original)
+
+        # Succes : confirmation de l'appairage.
+        result = await flow.async_step_member_memory({"jogged": True})
+        assert result["step_id"] == "member_pair_confirm"
+
+        # Refus de confirmer l'appairage : erreur, PROG renvoye.
+        result = await flow.async_step_member_pair_confirm({"paired": False})
+        assert result["errors"]["base"] == "pair_not_confirmed"
+
+        # Confirmation : on passe au membre suivant, puis retour au menu.
+        result = await flow.async_step_member_pair_confirm({"paired": True})
+        assert result["step_id"] == "member_memory"
+        result = await flow.async_step_member_memory({"jogged": True})
+        assert result["step_id"] == "member_pair_confirm"
+        result = await flow.async_step_member_pair_confirm({"paired": True})
+        assert result["type"] == "menu"
+
+        assert flow._devices[1]["group_addresses"] == ["01500000"]
+        assert flow._devices[2]["group_addresses"] == ["01500000"]
+        # PROG long du membre a chaque affichage du formulaire, PROG
+        # court du groupe a chaque confirmation (et renvoi apres erreur).
+        assert [(f["address"], f["repeats"]) for f in fake_rf.sent] == [
+            (10000001, PROG_MODE_REPEATS),  # formulaire initial
+            (10000001, PROG_MODE_REPEATS),  # re-affichage apres jogged=False
+            (1500000, 3),  # PROG groupe, membre A
+            (1500000, 3),  # renvoi apres paired=False
+            (10000002, PROG_MODE_REPEATS),  # formulaire membre B
+            (1500000, 3),  # PROG groupe, membre B
+        ]
+
+    asyncio.run(scenario())
