@@ -189,6 +189,19 @@ class PositionEstimator:
         self._target = None
         self._started_at = None
 
+    def stop_at(self, target: int) -> None:
+        """Stop tracking and snap to an intermediate target.
+
+        The last 1 s tick may have overshot the target; freezing on
+        the overshoot would make the next goto start from the wrong
+        position and reverse the motor (alternating positions).
+        """
+        self._position = _clamp(int(target))
+        self._start_position = self._position
+        self._direction = None
+        self._target = None
+        self._started_at = None
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -513,7 +526,10 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
                 self.async_write_ha_state()
                 return  # retry the stop frame on the next tick
             self._stop_members_tracking()
-        self._position_estimator.stop()
+            # Snap to the target: the last tick may have overshot it.
+            self._position_estimator.stop_at(target)
+        else:
+            self._position_estimator.stop()
         self._stop_tracking()
         self.async_write_ha_state()
         self._notify_parent_groups()
@@ -570,15 +586,21 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
                     await self._async_stop_at_target()
                 except HomeAssistantError as err:
                     _LOGGER.warning("Failed to stop %s: %s", self.entity_id, err)
+                    self._position_estimator.stop()
+                else:
+                    # The stop frame landed: snap to the target, the last
+                    # tick may have overshot it.
+                    self._position_estimator.stop_at(target)
                 if self._is_group:
                     # The radio stop halts every member motor: freeze
                     # the member estimates with the group.
                     self._stop_members_tracking()
-            # End-stop targets need no stop frame: the motors run their
-            # full course, so mirrored members keep their own pace (their
-            # shadow tick stops them at their end stop). Freezing them
-            # here would cut their estimates mid-course.
-            self._position_estimator.stop()
+            else:
+                # End-stop targets need no stop frame: the motors run their
+                # full course, so mirrored members keep their own pace (their
+                # shadow tick stops them at their end stop). Freezing them
+                # here would cut their estimates mid-course.
+                self._position_estimator.stop()
             self._stop_tracking()
         self.async_write_ha_state()
         self._notify_parent_groups()

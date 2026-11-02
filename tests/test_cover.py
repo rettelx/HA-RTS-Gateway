@@ -1742,3 +1742,28 @@ def test_goto_my_position_without_position_raises(hass, fake_rf, no_timer):
         assert fake_rf.sent == []
 
     asyncio.run(scenario())
+
+def test_goto_my_position_is_idempotent(hass, fake_rf, no_timer):
+    """Regression: apres un arret sur la cible My, l'estimation est calee
+    sur la cible. Un nouvel appui ne doit pas inverser la direction."""
+    async def scenario():
+        entity = build_cover(
+            hass, my_position=40, open_time_ms=20000, close_time_ms=20000
+        )
+        await entity.async_added_to_hass()
+
+        for _ in range(3):
+            await entity.async_goto_my_position()
+            est = entity._position_estimator
+            # Ticks de 1 s jusqu'a l'arret du mouvement.
+            for _ in range(60):
+                if not est.is_moving:
+                    break
+                est._started_at -= 1.0
+                await entity._async_movement_tick(None)
+            assert entity.current_cover_position == 40
+
+        # Un seul mouvement radio : les appuis suivants sont des no-ops.
+        assert [f["command"] for f in fake_rf.sent] == ["DOWN", "STOP"]
+
+    asyncio.run(scenario())
