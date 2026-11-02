@@ -360,3 +360,14 @@ def test_malformed_bits_falls_back_to_56(hass):
     events = [e for e in hass.bus.events if e["type"] == EVENT_FRAME]
     assert len(events) == 1
     assert events[0]["data"]["bits"] == 56
+
+
+def test_my_button_decodes_as_my(hass):
+    """Regression: the MY/STOP button (0x1) decodes as MY, not STOP, so a
+    physical remote MY press can drive the native favorite tracking."""
+    entity = make_entity(address_int=1000)
+    handler = make_handler(hass, entities=[entity])
+    fire(handler, address=1000, command=1, rolling_code=5)
+    entity.async_update_from_rx.assert_called_once_with(
+        SomfyCommand.MY, 5, "gw", 0, 1
+    )

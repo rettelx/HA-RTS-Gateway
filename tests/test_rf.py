@@ -80,7 +80,8 @@ def test_send_80bit_command(hass, native_rf):
     assert frame is not None
     assert frame.bits == 80
     assert frame.address == 0x654321
-    assert frame.command == SomfyCommand.STOP
+    # 80-bit plain MY decodes as MY (STOP is the 0xF extension).
+    assert frame.command == SomfyCommand.MY
 
 
 def test_step_command_forwards_step_size(hass, native_rf):

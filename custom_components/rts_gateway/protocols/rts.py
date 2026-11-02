@@ -66,7 +66,9 @@ COMMAND_TO_BUTTON: dict[SomfyCommand, SomfyRTSButton] = {
 }
 
 BUTTON_TO_COMMAND: dict[int, SomfyCommand] = {
-    BUTTON_MY: SomfyCommand.STOP,
+    # MY and STOP are one physical button (0x1): on RX it decodes as
+    # MY, and the cover resolves stop vs favorite from context.
+    BUTTON_MY: SomfyCommand.MY,
     BUTTON_UP: SomfyCommand.UP,
     BUTTON_MY_UP: SomfyCommand.UP,
     BUTTON_DOWN: SomfyCommand.DOWN,

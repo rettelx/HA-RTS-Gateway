@@ -1767,3 +1767,34 @@ def test_goto_my_position_is_idempotent(hass, fake_rf, no_timer):
         assert [f["command"] for f in fake_rf.sent] == ["DOWN", "STOP"]
 
     asyncio.run(scenario())
+
+
+def test_physical_my_press_tracks_native_favorite(hass, fake_rf, no_timer):
+    """Regression: appui MY sur une telecommande physique (bouton 0x1) :
+    un volet en mode natif (simulate_my desactive) démarre le suivi vers
+    sa position favorite au lieu de geler l'estimation."""
+    async def scenario():
+        from homeassistant.core import Event
+
+        from custom_components.rts_gateway.const import RX_EVENT
+        from custom_components.rts_gateway.rx_handler import SomfyRTSRxHandler
+
+        entity = build_cover(
+            hass, my_position=30, simulate_my=False,
+            linked_remote_addresses=["00500002"],
+        )
+        entity._entry.runtime_data.entities["cover.test"] = entity
+        hass.config_entries.entries.append(entity._entry)
+        handler = SomfyRTSRxHandler(hass)
+        handler.async_setup()
+
+        assert entity.current_cover_position == 100
+        handler._handle_event(Event(RX_EVENT, {
+            "address": "00500002", "command": "1", "rolling_code": "7",
+            "device": "gw", "step": "0", "bits": "56",
+        }))
+        # La trame est un MY : suivi vers la favorite 30, pas un gel.
+        assert entity.is_closing is True
+        assert entity._position_estimator.target == 30
+
+    asyncio.run(scenario())

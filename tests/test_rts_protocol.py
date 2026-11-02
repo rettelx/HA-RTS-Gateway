@@ -53,11 +53,11 @@ def test_round_trip(command, button, address, rolling_code):
 
 
 def test_stop_and_my_share_button():
-    """STOP and MY are the same RTS button."""
+    """STOP and MY are the same RTS button: it decodes as MY on RX."""
     timings = build_command(0x1234, SomfyCommand.STOP, 7).get_raw_timings()
     frame = decode_timings(timings)
     assert frame.control == BUTTON_MY
-    assert frame.command == SomfyCommand.STOP
+    assert frame.command == SomfyCommand.MY
 
 
 def test_encoder_shape():
@@ -387,8 +387,8 @@ def test_every_frame_of_burst_decodes_from_capture(command, button, address, rol
         frame = decode_timings(capture)
         assert frame is not None
         assert frame.address == address
-        # MY and STOP share the same RTS button.
-        assert frame.command in (command, SomfyCommand.STOP)
+        # MY and STOP share the same RTS button: it decodes as MY.
+        assert frame.command in (command, SomfyCommand.MY)
         assert frame.rolling_code == rolling_code
         decoded += 1
     assert decoded >= 3  # first frame + repeats
