@@ -148,6 +148,11 @@ TILT_STEP_INTERVAL_S = 0.75
 TILT_PRESS_REPEATS = 15
 # Silence after the last repeated frame before a press is resolved.
 TILT_PRESS_END_S = 0.5
+# Minimum on-air span of a press (first to last forwarded frame) for it
+# to count as a long press. The gateway dedups repeats within 1.5 s, so
+# a long press arrives as a few frames spaced by ~1.5 s, while a short
+# press arrives as one burst well under 1 s.
+LONG_PRESS_MIN_S = 1.2
 # Delay after the long PROG press for the motor to jog and enter
 # its programming mode before the group PROG is sent.
 PROG_MODE_JOG_S = 2.0

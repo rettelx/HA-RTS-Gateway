@@ -395,22 +395,27 @@ def test_will_remove_cancels_tilt(hass, fake_rf, monkeypatch):
 # =============================================================================
 # RX updates
 # =============================================================================
-def test_rx_updates_position_tracking(hass, fake_rf, no_timer):
-    entity = build_cover(hass)
+def test_rx_updates_position_tracking(hass, fake_rf, no_timer, monkeypatch):
+    async def scenario():
+        monkeypatch.setattr(cover_module, "TILT_PRESS_END_S", 0.05)
+        monkeypatch.setattr(cover_module, "_PRESS_POLL_S", 0.01)
+        entity = build_cover(hass)
 
-    entity.async_update_from_rx(SomfyCommand.UP, 10, "remote", 0)
-    assert entity.is_opening is True
+        entity.async_update_from_rx(SomfyCommand.UP, 10, "remote", 0)
+        assert entity.is_opening is True
 
-    entity.async_update_from_rx(SomfyCommand.DOWN, 11, "remote", 0)
-    assert entity.is_closing is True
+        entity.async_update_from_rx(SomfyCommand.DOWN, 11, "remote", 0)
+        assert entity.is_closing is True
 
-    entity.async_update_from_rx(SomfyCommand.MY, 12, "remote", 0)
-    assert entity.is_opening is None and entity.is_closing is None
+        entity.async_update_from_rx(SomfyCommand.MY, 12, "remote", 0)
+        await entity._press_task  # MY est resolu apres la fin de l'appui
+        assert entity.is_opening is None and entity.is_closing is None
 
-    attributes = entity.extra_state_attributes
-    assert attributes["last_rx_rolling_code"] == 12
-    assert attributes["last_rx_device"] == "remote"
+        attributes = entity.extra_state_attributes
+        assert attributes["last_rx_rolling_code"] == 12
+        assert attributes["last_rx_device"] == "remote"
 
+    asyncio.run(scenario())
 
 def test_rx_step_updates_tilt(hass):
     entity = build_cover(hass, protocol="rts_80bit", tilt=True, tilt_step_percent=10)
@@ -724,69 +729,135 @@ def test_stop_method_my_sends_my(hass, fake_rf, no_timer):
     asyncio.run(scenario())
 
 
-def test_rx_my_while_moving_is_a_stop(hass, no_timer):
+def test_rx_my_while_moving_is_a_stop(hass, no_timer, monkeypatch):
     """MY recu pendant un mouvement = STOP (bouton unique 0x1 en 56 bits) :
     l'estimation se gele, pas de suivi vers la favorite."""
-    entity = build_cover(hass, my_position=30, simulate_my=False)
-    entity.async_update_from_rx(SomfyCommand.UP, 9, "remote", 0, 1)
-    assert entity.is_opening is True
+    async def scenario():
+        monkeypatch.setattr(cover_module, "TILT_PRESS_END_S", 0.05)
+        monkeypatch.setattr(cover_module, "_PRESS_POLL_S", 0.01)
+        entity = build_cover(hass, my_position=30, simulate_my=False)
+        entity.async_update_from_rx(SomfyCommand.UP, 9, "remote", 0, 1)
+        assert entity.is_opening is True
 
-    entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 1)
-    assert entity.is_opening is None  # gele
-    assert entity._position_estimator.target is None  # pas de cible favorite
+        entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 1)
+        await entity._press_task
+        assert entity.is_opening is None  # gele
+        assert entity._position_estimator.target is None  # pas de cible favorite
 
+    asyncio.run(scenario())
 
-def test_rx_native_my_tracks_to_favorite(hass, no_timer):
+def test_rx_native_my_tracks_to_favorite(hass, no_timer, monkeypatch):
     """MY court recu en natif : suivi vers my_position, pas de freeze."""
-    entity = build_cover(hass, my_position=30, simulate_my=False)
-    assert entity.current_cover_position == 100
+    async def scenario():
+        monkeypatch.setattr(cover_module, "TILT_PRESS_END_S", 0.05)
+        monkeypatch.setattr(cover_module, "_PRESS_POLL_S", 0.01)
+        entity = build_cover(hass, my_position=30, simulate_my=False)
+        assert entity.current_cover_position == 100
 
-    entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 1)
-    assert entity.is_closing is True  # suivi vers 30
+        entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 1)
+        await entity._press_task
+        assert entity.is_closing is True  # suivi vers 30
 
+    asyncio.run(scenario())
 
-def test_rx_native_long_my_memorizes_freeze(hass, no_timer):
-    """MY long recu (>= 35 repetitions) : memorisation, rien ne bouge."""
-    entity = build_cover(hass, my_position=30, simulate_my=False)
+def test_rx_long_my_by_duration_memorizes(hass, no_timer, monkeypatch):
+    """Appui long detecte par sa duree (trames espacees par la dedup de la
+    passerelle, comme en 56 bits reel) : la position courante devient la
+    favorite. Un appui court (rafale < 1 s) ne memorise pas."""
+    async def scenario():
+        monkeypatch.setattr(cover_module, "TILT_PRESS_END_S", 0.05)
+        monkeypatch.setattr(cover_module, "_PRESS_POLL_S", 0.01)
+        entity = build_cover(hass, my_position=30, simulate_my=False)
+        entity.async_set_current_position(80)
 
-    entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 35)
-    assert entity.is_closing is None  # estimate figee a 100
-    assert entity.current_cover_position == 100
+        base = 1000.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 1)
+        # La passerelle deduplique : l'appui long arrive en trames espacees.
+        monkeypatch.setattr(time, "monotonic", lambda: base + 1.6)
+        entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 2)
+        monkeypatch.setattr(time, "monotonic", lambda: base + 2.1)
+        await entity._press_task
 
+        # Duree 2.1 s >= LONG_PRESS_MIN_S -> appui long -> memorisation.
+        assert entity._my_position == 80
+        assert entity._entry.data["devices"][0]["my_position"] == 80
+        assert entity.current_cover_position == 80
 
-def test_rx_simulated_my_drives_to_favorite(hass, fake_rf, no_timer):
+        # Un appui court (rafale < 1 s) va vers la favorite, sans memoriser.
+        entity.async_set_current_position(60)
+        monkeypatch.setattr(time, "monotonic", lambda: base + 10)
+        entity.async_update_from_rx(SomfyCommand.MY, 11, "remote", 0, 1)
+        monkeypatch.setattr(time, "monotonic", lambda: base + 10.2)
+        await entity._press_task
+        assert entity._my_position == 80  # inchangee : pas de memorisation
+        assert entity.is_opening is True  # suivi vers la favorite 80
+    asyncio.run(scenario())
+
+def test_rx_native_long_my_memorizes_current_position(hass, no_timer, monkeypatch):
+    """MY long recu (>= 35 repetitions) : la position courante devient la
+    nouvelle favorite enregistree (et persistee), le volet ne bouge pas."""
+    async def scenario():
+        monkeypatch.setattr(cover_module, "TILT_PRESS_END_S", 0.05)
+        monkeypatch.setattr(cover_module, "_PRESS_POLL_S", 0.01)
+        entity = build_cover(hass, my_position=30, simulate_my=False)
+        entity.async_set_current_position(80)
+
+        entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 35)
+        await entity._press_task
+
+        assert entity._my_position == 80  # favorite = position courante
+        assert entity._entry.data["devices"][0]["my_position"] == 80  # persiste
+        assert entity.current_cover_position == 80  # pas de mouvement
+        assert entity._position_estimator.is_moving is False
+
+    asyncio.run(scenario())
+
+def test_rx_simulated_my_drives_to_favorite(hass, fake_rf, no_timer, monkeypatch):
     """MY court recu en simule : HA conduit le volet vers my_position."""
     async def scenario():
+        monkeypatch.setattr(cover_module, "TILT_PRESS_END_S", 0.05)
+        monkeypatch.setattr(cover_module, "_PRESS_POLL_S", 0.01)
         entity = build_cover(hass, my_position=30)
         await entity.async_added_to_hass()
 
         entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 1)
+        await entity._press_task
         await asyncio.sleep(0)  # laisse la tache demarree s executer
         assert fake_rf.sent[-1]["command"] == "DOWN"
         assert entity.is_closing is True  # conduit vers 30
 
     asyncio.run(scenario())
 
-
-def test_rx_simulated_my_without_position_freezes(hass, no_timer):
+def test_rx_simulated_my_without_position_freezes(hass, no_timer, monkeypatch):
     """MY recu en simule sans my_position : rien a faire -> freeze."""
-    entity = build_cover(hass)
+    async def scenario():
+        monkeypatch.setattr(cover_module, "TILT_PRESS_END_S", 0.05)
+        monkeypatch.setattr(cover_module, "_PRESS_POLL_S", 0.01)
+        entity = build_cover(hass)
 
-    entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 1)
-    assert entity.is_closing is None
+        entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 1)
+        await entity._press_task
+        assert entity.is_closing is None
 
+    asyncio.run(scenario())
 
-def test_rx_native_my_inverted_scales(hass, no_timer):
+def test_rx_native_my_inverted_scales(hass, no_timer, monkeypatch):
     """Echelle inversee : le suivi natif part dans le bon sens."""
-    entity = build_cover(
-        hass, my_position=30, simulate_my=False, invert_position=True
-    )
-    # Volet ouvert = 0 affiche en echelle inversee (100 logique).
+    async def scenario():
+        monkeypatch.setattr(cover_module, "TILT_PRESS_END_S", 0.05)
+        monkeypatch.setattr(cover_module, "_PRESS_POLL_S", 0.01)
+        entity = build_cover(
+            hass, my_position=30, simulate_my=False, invert_position=True
+        )
+        # Volet ouvert = 0 affiche en echelle inversee (100 logique).
 
-    entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 1)
-    # my_position 30 affiche = 70 logique < 100 logique -> descente.
-    assert entity.is_closing is True
+        entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 1)
+        await entity._press_task
+        # my_position 30 affiche = 70 logique < 100 logique -> descente.
+        assert entity.is_closing is True
 
+    asyncio.run(scenario())
 
 def test_native_my_sends_frame_and_tracks(hass, fake_rf, no_timer):
     """MY natif : trame MY au moteur, estimation vers my_position."""
@@ -1371,8 +1442,10 @@ def test_group_native_my_retries_stop_after_failure(
 
         base = 4096.0
         monkeypatch.setattr(time, "monotonic", lambda: base)
+        monkeypatch.setattr(cover_module, "TILT_PRESS_END_S", 0)
         # Trame MY d'une telecommande : suivi natif, sans radio.
         group.async_update_from_rx(SomfyCommand.MY, 500, "remote", 0, 1)
+        await group._press_task  # resolution de l'appui (temps gele)
         for member in members:
             assert member._shadow_tracking is True
 
@@ -1412,7 +1485,9 @@ def test_group_native_my_member_without_favorite(hass, fake_rf, no_timer, monkey
 
         base = 4096.0
         monkeypatch.setattr(time, "monotonic", lambda: base)
+        monkeypatch.setattr(cover_module, "TILT_PRESS_END_S", 0)
         group.async_update_from_rx(SomfyCommand.MY, 500, "remote", 0, 1)
+        await group._press_task  # resolution de l'appui (temps gele)
         assert members[0]._shadow_tracking is True
         assert members[1]._shadow_tracking is False
         assert members[1].current_cover_position == 90
@@ -1781,7 +1856,7 @@ def test_goto_my_position_is_idempotent(hass, fake_rf, no_timer):
     asyncio.run(scenario())
 
 
-def test_physical_my_press_tracks_native_favorite(hass, fake_rf, no_timer):
+def test_physical_my_press_tracks_native_favorite(hass, fake_rf, no_timer, monkeypatch):
     """Regression: appui MY sur une telecommande physique (bouton 0x1) :
     un volet en mode natif (simulate_my desactive) démarre le suivi vers
     sa position favorite au lieu de geler l'estimation."""
@@ -1791,6 +1866,8 @@ def test_physical_my_press_tracks_native_favorite(hass, fake_rf, no_timer):
         from custom_components.rts_gateway.const import RX_EVENT
         from custom_components.rts_gateway.rx_handler import SomfyRTSRxHandler
 
+        monkeypatch.setattr(cover_module, "TILT_PRESS_END_S", 0.05)
+        monkeypatch.setattr(cover_module, "_PRESS_POLL_S", 0.01)
         entity = build_cover(
             hass, my_position=30, simulate_my=False,
             linked_remote_addresses=["00500002"],
@@ -1805,8 +1882,10 @@ def test_physical_my_press_tracks_native_favorite(hass, fake_rf, no_timer):
             "address": "00500002", "command": "1", "rolling_code": "7",
             "device": "gw", "step": "0", "bits": "56",
         }))
+        await entity._press_task  # resolution de l'appui
         # La trame est un MY : suivi vers la favorite 30, pas un gel.
         assert entity.is_closing is True
         assert entity._position_estimator.target == 30
 
     asyncio.run(scenario())
+

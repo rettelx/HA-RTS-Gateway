@@ -27,6 +27,7 @@ from .const import (
     CONF_ADDRESS,
     CONF_CLOSE_TIME_MS,
     CONF_DEVICE_TYPE,
+    CONF_DEVICES,
     CONF_GROUP,
     CONF_GROUP_ADDRESSES,
     CONF_INVERT,
@@ -53,6 +54,7 @@ from .const import (
     DEVICE_TYPE_MAPPING,
     DEVICE_TYPE_TO_DEVICE_CLASS,
     DOMAIN,
+    LONG_PRESS_MIN_S,
     SENSOR_SUN_BIT,
     SENSOR_WIND_BIT,
     SETMY_REPEATS,
@@ -1065,6 +1067,29 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         if self._is_group:
             self._track_members_native_my()
 
+    def _memorize_my_position_from_rx(self) -> None:
+        """Record the current position as the My favorite (long MY press
+        received from a remote).
+
+        The motor memorizes its current physical position; HA's best
+        estimate of it is the current position. Persisted on the entry.
+        """
+        position = self.current_cover_position  # display scale
+        self.async_set_my_position(position)
+        entry = self._entry
+        devices = [dict(d) for d in entry.data.get(CONF_DEVICES, [])]
+        for device in devices:
+            if str(device.get(CONF_ADDRESS)) == self._address:
+                device[CONF_MY_POSITION] = position
+        self._hass.config_entries.async_update_entry(
+            entry, data={**entry.data, CONF_DEVICES: devices}
+        )
+        # Memorizing does not move the motor: freeze the estimate.
+        self._position_estimator.stop()
+        self._stop_tracking()
+        if self._is_group:
+            self._stop_members_tracking()
+
     async def async_memorize_my_position(self) -> None:
         """Send the long MY press that memorizes the current position.
 
@@ -1146,6 +1171,7 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
             "command": command,
             "code": rolling_code,
             "count": repeat,
+            "first_seen": now,
             "last_seen": now,
         }
         self._press_task = self._hass.async_create_task(
@@ -1153,19 +1179,52 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         )
 
     async def _async_resolve_press(self) -> None:
-        """Decide lift vs tilt once a remote press has ended."""
+        """Resolve a remote press once it has ended."""
         press = self._press
         assert press is not None
         while time.monotonic() - press["last_seen"] < TILT_PRESS_END_S:
             await asyncio.sleep(_PRESS_POLL_S)
         self._press = None
         self._press_task = None
-        if press["count"] >= TILT_PRESS_REPEATS:
+        command = press["command"]
+        # A long press is one held on air (enough repeats) or spanning
+        # several seconds (the gateway forwards a long press as a few
+        # frames spaced by its dedup window).
+        duration = press["last_seen"] - press["first_seen"]
+        threshold = (SETMY_REPEATS if command == SomfyCommand.MY
+                     else TILT_PRESS_REPEATS)
+        is_long = press["count"] >= threshold or duration >= LONG_PRESS_MIN_S
+        if command == SomfyCommand.MY:
+            if is_long:
+                # Long MY = memorize: the motor records its current
+                # position as the new favorite; HA mirrors and persists it.
+                self._memorize_my_position_from_rx()
+            elif (
+                self._my_position is not None
+                and not self._position_estimator.is_moving
+            ):
+                if self._simulate_my:
+                    # The motor ignores MY (no memorized favorite):
+                    # Home Assistant drives it to its own favorite.
+                    self._hass.async_create_task(
+                        self.async_goto_my_position()
+                    )
+                else:
+                    # Native: the motor heads to its memorized
+                    # favorite, assumed to match my_position.
+                    self._native_my_tracking()
+            else:
+                # MY while moving = stop: freeze the estimate.
+                self._position_estimator.stop()
+                self._stop_tracking()
+                if self._is_group:
+                    self._stop_members_tracking()
+        elif is_long:
             # Long press: the tilt motor runs until its end stop.
             self._start_tilt_tracking(
-                100 if press["command"] == SomfyCommand.UP else 0
+                100 if command == SomfyCommand.UP else 0
             )
-        elif press["command"] == SomfyCommand.UP:
+        elif command == SomfyCommand.UP:
             self._position_estimator.start("up", 100)
             self._start_tracking()
         else:
@@ -1244,6 +1303,13 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         self._last_rx_device = device
         self._last_rx_step = step or None
 
+        if command == SomfyCommand.MY:
+            # MY/STOP is one physical button (0x1): short press = stop or
+            # favorite, long press = memorize the current position.
+            # Resolved once the press ends (_async_resolve_press).
+            self._track_remote_press(command, rolling_code, repeat)
+            self.async_write_ha_state()
+            return
         if (
             self._tilt_supported
             and self._tilt_timed
@@ -1254,7 +1320,7 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
             self._track_remote_press(command, rolling_code, repeat)
             self.async_write_ha_state()
             return
-        if command in (SomfyCommand.STOP, SomfyCommand.MY):
+        if command == SomfyCommand.STOP:
             self._cancel_press()
             self._cancel_tilt_tracking()
         if command == SomfyCommand.UP:
@@ -1267,30 +1333,12 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
             self._start_tracking()
             if self._is_group:
                 self._track_members_movement("down", 0)
-        elif command in (SomfyCommand.STOP, SomfyCommand.MY):
-            if (
-                command == SomfyCommand.MY
-                and repeat < SETMY_REPEATS
-                and self._my_position is not None
-                and not self._position_estimator.is_moving
-            ):
-                if self._simulate_my:
-                    # The motor ignores MY (no memorized favorite):
-                    # Home Assistant drives it to its own favorite.
-                    self._hass.async_create_task(
-                        self.async_goto_my_position()
-                    )
-                else:
-                    # Native: the motor heads to its memorized
-                    # favorite, assumed to match my_position.
-                    self._native_my_tracking()
-            else:
-                # STOP, a long MY (memorize) or an MY while moving:
-                # the motor stops, the estimate freezes where it is.
-                self._position_estimator.stop()
-                self._stop_tracking()
-                if self._is_group:
-                    self._stop_members_tracking()
+        elif command == SomfyCommand.STOP:
+            # The motor stops, the estimate freezes where it is.
+            self._position_estimator.stop()
+            self._stop_tracking()
+            if self._is_group:
+                self._stop_members_tracking()
         elif command == SomfyCommand.STEP_UP:
             self._apply_rx_step(up=True)
             if self._is_group:
