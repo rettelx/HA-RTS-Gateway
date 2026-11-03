@@ -22,6 +22,13 @@ constexpr uint32_t FRAME_BYTES = 10;
 constexpr uint32_t TOLERANCE_PCT = 30;
 /// Minimum hardware sync runs before the software sync
 constexpr uint32_t MIN_HW_RUNS = 4;
+/// Duplicate frame suppression window, in milliseconds. An RTS press
+/// repeats the same frame on air while the button is held; identical
+/// frames within this window are dropped, but one frame per window is
+/// still forwarded so Home Assistant can detect the release quickly
+/// (its press-end silence threshold only needs to exceed this window
+/// plus the event delivery latency).
+constexpr uint32_t RX_DUPLICATE_WINDOW_MS = 250;
 
 /// Trigger fired with (address, command, rolling_code, bits, step) on each
 /// decoded frame. ``command`` uses the extended command byte for 80-bit

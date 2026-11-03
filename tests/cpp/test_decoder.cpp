@@ -12,6 +12,7 @@
 
 using esphome::remote_base::RemoteReceiveData;
 using esphome::rts_gateway::RTSGatewayComponent;
+using esphome::rts_gateway::RX_DUPLICATE_WINDOW_MS;
 
 static int failures = 0;
 
@@ -41,7 +42,7 @@ int main() {
     check(std::get<4>(call) == v.step, "step mismatch", v.name);
   }
 
-  // 2. Duplicate suppression: same frame within 1.5 s fires once, then again.
+  // 2. Duplicate suppression: same frame within the window fires once, then again.
   {
     const auto &v = TEST_VECTORS[0];
     esphome::test_millis() += 2000;
@@ -50,7 +51,7 @@ int main() {
     comp.on_receive(RemoteReceiveData(v.timings));
     check(comp.get_command_trigger()->calls_.size() == 1,
           "duplicate frame not suppressed", v.name);
-    esphome::test_millis() += 1600;
+    esphome::test_millis() += RX_DUPLICATE_WINDOW_MS + 50;
     comp.on_receive(RemoteReceiveData(v.timings));
     check(comp.get_command_trigger()->calls_.size() == 2,
           "no retrigger after the duplicate window", v.name);

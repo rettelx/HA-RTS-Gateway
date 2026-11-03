@@ -787,10 +787,11 @@ def test_rx_long_my_memorizes_press_start_position(hass, no_timer, monkeypatch):
     asyncio.run(scenario())
 
 def test_rx_long_press_not_resolved_between_gateway_frames(hass, no_timer, monkeypatch):
-    """Regression: la passerelle deduplique a ~1,5 s, un appui long arrive
-    en trames espacees. La resolution ne doit PAS conclure 'appui court'
-    entre deux trames (sinon HA part vers l'ancienne favorite) ; a la fin
-    de l'appui, la position courante est memorisee."""
+    """Regression: la passerelle deduplique a ~0,25 s, un appui long arrive
+    en trames espacees de la fenetre de dedup. La resolution ne doit PAS
+    conclure 'appui court' entre deux trames (sinon HA part vers
+    l'ancienne favorite) ; a la fin de l'appui, la position courante est
+    memorisee."""
     async def scenario():
         monkeypatch.setattr(cover_module, "_PRESS_POLL_S", 0.01)
         entity = build_cover(hass, my_position=45, simulate_my=True)
@@ -802,16 +803,18 @@ def test_rx_long_press_not_resolved_between_gateway_frames(hass, no_timer, monke
         task = entity._press_task
         assert task is not None
 
-        # 1,6 s plus tard : trame suivante de la passerelle, l'appui continue.
-        monkeypatch.setattr(time, "monotonic", lambda: base + 1.6)
-        entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 2)
+        # Trames suivantes de la passerelle (dedup ~0,25 s) : l'appui
+        # continue, la resolution ne doit pas conclure entre deux trames.
+        for i, t in enumerate((0.3, 0.6, 0.9, 1.2), start=2):
+            monkeypatch.setattr(time, "monotonic", lambda t=t: base + t)
+            entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, i)
         await asyncio.sleep(0)  # laisse la tache demarrer (horloge gelee)
         assert not task.done()  # pas resolu entre deux trames
         assert entity._my_position == 45  # pas de memorisation prematuree
         assert not entity._position_estimator.is_moving  # pas parti vers 45
 
-        # Fin de l'appui : silence >= TILT_PRESS_END_S (2,5 s) -> resolution.
-        monkeypatch.setattr(time, "monotonic", lambda: base + 4.2)
+        # Fin de l'appui : silence >= TILT_PRESS_END_S -> resolution.
+        monkeypatch.setattr(time, "monotonic", lambda: base + 2.1)
         await task
         assert entity._my_position == 27  # position courante memorisee
         assert entity._entry.data["devices"][0]["my_position"] == 27
@@ -834,12 +837,13 @@ def test_rx_long_my_by_duration_memorizes(hass, no_timer, monkeypatch):
         monkeypatch.setattr(time, "monotonic", lambda: base)
         entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 1)
         # La passerelle deduplique : l'appui long arrive en trames espacees.
-        monkeypatch.setattr(time, "monotonic", lambda: base + 1.6)
-        entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 2)
-        monkeypatch.setattr(time, "monotonic", lambda: base + 2.1)
+        for i, t in enumerate((0.3, 0.6, 0.9, 1.2), start=2):
+            monkeypatch.setattr(time, "monotonic", lambda t=t: base + t)
+            entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, i)
+        monkeypatch.setattr(time, "monotonic", lambda: base + 1.5)
         await entity._press_task
 
-        # Duree 2.1 s >= LONG_PRESS_MIN_S -> appui long -> memorisation.
+        # Duree 1.2 s >= LONG_PRESS_MIN_S -> appui long -> memorisation.
         assert entity._my_position == 80
         assert entity._entry.data["devices"][0]["my_position"] == 80
         assert entity.current_cover_position == 80

@@ -199,9 +199,11 @@ bool RTSGatewayComponent::decode_frame_(const remote_base::RemoteReceiveData &da
       (static_cast<uint32_t>(frame[4]) << 16) | (static_cast<uint32_t>(frame[5]) << 8) | frame[6];
 
   // Suppress duplicates: each press repeats the same rolling code on air.
+  // While the button is held, one frame per RX_DUPLICATE_WINDOW_MS is
+  // still forwarded so Home Assistant can detect the release quickly.
   const uint32_t now = millis();
   if (address == this->last_address_ && rolling_code == this->last_rolling_code_ &&
-      now - this->last_rx_millis_ < 1500) {
+      now - this->last_rx_millis_ < RX_DUPLICATE_WINDOW_MS) {
     return true;
   }
   this->last_address_ = address;
