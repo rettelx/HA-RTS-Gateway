@@ -1027,8 +1027,23 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
     def async_set_my_position(self, position: int) -> None:
         """Store a new My (favorite) position (display scale)."""
         self._my_position = _clamp(int(position))
-        self._device_config[CONF_MY_POSITION] = self._my_position
+        # Do NOT write self._device_config[CONF_MY_POSITION] here: the device
+        # dict lives inside entry.data, and mutating it in place makes the
+        # async_update_entry call in async_set_my_position_persisted see no
+        # change, so nothing is saved to storage and the value reverts to the
+        # persisted one on restart. Persisting is the caller's job.
         self.async_write_ha_state()
+
+    def async_set_my_position_persisted(self, position: int) -> None:
+        """Store the My position and persist it on the config entry."""
+        self.async_set_my_position(position)
+        devices = [dict(d) for d in self._entry.data.get(CONF_DEVICES, [])]
+        for device in devices:
+            if str(device.get(CONF_ADDRESS)) == self._address:
+                device[CONF_MY_POSITION] = self._my_position
+        self._hass.config_entries.async_update_entry(
+            self._entry, data={**self._entry.data, CONF_DEVICES: devices}
+        )
 
     def async_set_current_position(self, position: int) -> None:
         """Realign the position estimate without moving the motor."""
@@ -1075,16 +1090,7 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         (a long MY stops a moving motor first, then memorizes); HA
         captures the estimate at press start. Persisted on the entry.
         """
-        position = _clamp(int(position))  # display scale
-        self.async_set_my_position(position)
-        entry = self._entry
-        devices = [dict(d) for d in entry.data.get(CONF_DEVICES, [])]
-        for device in devices:
-            if str(device.get(CONF_ADDRESS)) == self._address:
-                device[CONF_MY_POSITION] = position
-        self._hass.config_entries.async_update_entry(
-            entry, data={**entry.data, CONF_DEVICES: devices}
-        )
+        self.async_set_my_position_persisted(position)
         # Memorizing does not move the motor: re-anchor the estimate on
         # the position captured when the press started.
         logical = 100 - position if self._invert_position else position

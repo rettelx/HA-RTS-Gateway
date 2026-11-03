@@ -8,6 +8,7 @@ config-entry manager and the entity restore state API.
 from __future__ import annotations
 
 import asyncio
+import copy
 from typing import Any, ClassVar
 from unittest.mock import AsyncMock, MagicMock
 
@@ -86,11 +87,18 @@ class FakeConfigEntries:
         return None
 
     def async_update_entry(self, entry, **kwargs):
-        self.updated.append((entry, kwargs))
-        if "data" in kwargs:
+        # Mirror HA's ConfigEntries._async_update_entry: when nothing
+        # actually changed (e.g. the device dicts were mutated in place
+        # inside entry.data), there is no save and no update listener.
+        changed = False
+        if "data" in kwargs and entry.data != kwargs["data"]:
             entry.data = kwargs["data"]
-        if "options" in kwargs:
+            changed = True
+        if "options" in kwargs and entry.options != kwargs["options"]:
             entry.options = kwargs["options"]
+            changed = True
+        if changed:
+            self.updated.append((entry, kwargs))
 
     async def async_forward_entry_setups(self, entry, platforms):
         self.forwarded.append((entry, list(platforms)))
@@ -279,3 +287,26 @@ def prepare_entity(entity, entity_id):
     entity.async_write_ha_state = MagicMock()
     entity.async_get_last_state = AsyncMock(return_value=None)
     return entity
+
+
+def persisted_entry_data(hass, entry, original_data):
+    """Return the entry data as HA would reload it from storage.
+
+    ``original_data`` must be a deep copy of the entry data taken
+    BEFORE the write: entities mutate the device dicts in place, and
+    only an async_update_entry call schedules a save to storage.
+    """
+    data = original_data
+    for updated_entry, kwargs in getattr(hass.config_entries, "updated", []):
+        if updated_entry is entry and "data" in kwargs:
+            data = kwargs["data"]
+    return copy.deepcopy(data)
+
+
+def restart_cover(hass, data, device_index=0):
+    """Build a fresh cover from persisted entry data (post-restart)."""
+    from custom_components.rts_gateway.cover import SomfyRTSCover
+
+    entry = FakeConfigEntry(data=data)
+    cover = SomfyRTSCover(hass, entry, entry.data["devices"][device_index])
+    return prepare_entity(cover, "cover.restarted")

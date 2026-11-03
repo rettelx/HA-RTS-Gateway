@@ -3,12 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from conftest import make_runtime_data
-from fakes import FakeConfigEntry, make_device, prepare_entity
+from fakes import (
+    FakeConfigEntry,
+    make_device,
+    persisted_entry_data,
+    prepare_entity,
+    restart_cover,
+)
 from homeassistant.exceptions import ServiceValidationError
 
 from custom_components.rts_gateway import rf
@@ -789,3 +796,53 @@ def test_non_group_cover_has_no_members(hass, fake_rf, no_timer):
     plain = member
     assert plain.extra_state_attributes["members"] == []
     assert plain.extra_state_attributes["group_addresses"] == []
+
+
+def test_set_my_position_survives_ha_restart(hass):
+    """Le service set_my_position sauvegarde le config entry (async_update_entry
+    -> ecriture disque) : la valeur est retrouvee apres un redemarrage de HA."""
+    asyncio.run(async_setup_services(hass))
+    entry, _ = build_real_cover(hass)
+
+    original = copy.deepcopy(entry.data)  # etat disque avant ecriture
+    call_service(hass, SERVICE_SET_MY_POSITION, {
+        "entity_id": "cover.test", "position": 35,
+    })
+
+    assert hass.config_entries.updated  # sauvegarde disque declenchee
+    disk = persisted_entry_data(hass, entry, original)
+    assert disk["devices"][0]["my_position"] == 35
+    assert restart_cover(hass, disk)._my_position == 35
+
+
+def test_memorize_my_position_service_survives_ha_restart(hass, fake_rf, no_timer):
+    """Le service memorize_my_position persiste la position courante comme
+    favorite : retrouvee apres redemarrage."""
+    asyncio.run(async_setup_services(hass))
+    entry, entity = build_real_cover(hass)
+    entity.async_set_current_position(42)
+
+    original = copy.deepcopy(entry.data)
+    call_service(hass, SERVICE_MEMORIZE_MY_POSITION, {
+        "entity_id": "cover.test"
+    })
+
+    disk = persisted_entry_data(hass, entry, original)
+    assert disk["devices"][0]["my_position"] == 42
+    assert restart_cover(hass, disk)._my_position == 42
+
+
+def test_link_remote_survives_ha_restart(hass):
+    """Autre valeur mutable : les telecommandes liees sont persistees dans le
+    config entry, comme la position MY."""
+    asyncio.run(async_setup_services(hass))
+    entry, _ = build_real_cover(hass)
+
+    original = copy.deepcopy(entry.data)
+    call_service(hass, SERVICE_LINK_REMOTE, {
+        "entity_id": "cover.test", "remote_address": "00500002",
+    })
+
+    disk = persisted_entry_data(hass, entry, original)
+    assert disk["devices"][0]["linked_remote_addresses"] == ["00500002"]
+    assert restart_cover(hass, disk)._linked_remote_addresses == ["00500002"]
