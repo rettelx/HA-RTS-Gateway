@@ -555,6 +555,18 @@
         "name": "Recalibrate position",
         "icon": "mdi:sync"
       }
+    },
+    "sensor": {
+      "my_position": {
+        "name": "My position",
+        "icon": "mdi:star"
+      }
+    },
+    "number": {
+      "set_my_position": {
+        "name": "Set My position",
+        "icon": "mdi:pencil"
+      }
     }
   },
   "services": {

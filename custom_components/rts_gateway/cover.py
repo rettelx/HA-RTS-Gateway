@@ -1032,6 +1032,7 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         # async_update_entry call in async_set_my_position_persisted see no
         # change, so nothing is saved to storage and the value reverts to the
         # persisted one on restart. Persisting is the caller's job.
+        self._notify_my_sensors()
         self.async_write_ha_state()
 
     def async_set_my_position_persisted(self, position: int) -> None:
@@ -1044,6 +1045,15 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         self._hass.config_entries.async_update_entry(
             self._entry, data={**self._entry.data, CONF_DEVICES: devices}
         )
+
+    def _notify_my_sensors(self) -> None:
+        """Refresh the My-position sensors attached to this device."""
+        runtime = getattr(self._entry, "runtime_data", None)
+        if runtime is None:
+            return
+        for sensor in getattr(runtime, "my_sensors", {}).values():
+            if getattr(sensor, "_address", None) == self._address:
+                sensor.async_write_ha_state()
 
     def async_set_current_position(self, position: int) -> None:
         """Realign the position estimate without moving the motor."""

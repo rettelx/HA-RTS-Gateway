@@ -105,11 +105,12 @@ def no_timer(monkeypatch):
     return cancels
 
 
-def make_runtime_data(entities=None, sensors=None):
+def make_runtime_data(entities=None, sensors=None, my_sensors=None):
     """Runtime data stand-in matching entry.runtime_data usage."""
     from types import SimpleNamespace
 
     return SimpleNamespace(
         entities=entities if entities is not None else {},
         sensors=sensors if sensors is not None else {},
+        my_sensors=my_sensors if my_sensors is not None else {},
     )

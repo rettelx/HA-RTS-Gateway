@@ -65,6 +65,7 @@ class SomfyRTSRuntimeData:
 
     entities: dict[str, Any] = field(default_factory=dict)
     sensors: dict[Any, Any] = field(default_factory=dict)
+    my_sensors: dict[str, Any] = field(default_factory=dict)
 
 
 def _rx_enabled(entry: ConfigEntry) -> bool:

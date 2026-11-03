@@ -276,6 +276,8 @@ PLATFORMS = [
     Platform.SWITCH,
     Platform.LIGHT,
     Platform.BUTTON,
+    Platform.SENSOR,
+    Platform.NUMBER,
 ]
 
 # =============================================================================
