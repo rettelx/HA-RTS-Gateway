@@ -55,7 +55,9 @@ class FakeBus:
         self.listeners: dict[str, Any] = {}
         self.events: list[dict[str, Any]] = []
 
-    def async_listen(self, event_type, handler):
+    def async_listen(self, event_type, handler, **kwargs):
+        # kwargs (event_filter, job_type, ...) are accepted and ignored:
+        # the fake only records one handler per event type.
         self.listeners[event_type] = handler
 
         def unsubscribe():
