@@ -1154,6 +1154,13 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         self._press_task = None
         self._press = None
 
+    def _freeze_movement(self) -> None:
+        """Freeze the position estimate where it is and stop tracking."""
+        self._position_estimator.stop()
+        self._stop_tracking()
+        if self._is_group:
+            self._stop_members_tracking()
+
     def _track_remote_press(
         self, command: SomfyCommand, rolling_code: int, repeat: int
     ) -> None:
@@ -1179,6 +1186,9 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
             # Position when the press started: a long MY press does not
             # move the motor, so this is the position it memorizes.
             "position": self.current_cover_position,
+            # Set when a MY frame arrived while moving: the press is
+            # consumed as a stop, the estimate is already frozen.
+            "stopped_movement": False,
         }
         self._press_task = self._hass.async_create_task(
             self._async_resolve_press()
@@ -1205,6 +1215,10 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
                 # Long MY = memorize: the motor records its current
                 # position as the new favorite; HA mirrors and persists it.
                 self._memorize_my_position_from_rx(press["position"])
+            elif press["stopped_movement"]:
+                # MY arrived while moving: the estimate was frozen on the
+                # first frame, the press was consumed as a stop.
+                pass
             elif (
                 self._my_position is not None
                 and not self._position_estimator.is_moving
@@ -1221,10 +1235,7 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
                     self._native_my_tracking()
             else:
                 # MY while moving = stop: freeze the estimate.
-                self._position_estimator.stop()
-                self._stop_tracking()
-                if self._is_group:
-                    self._stop_members_tracking()
+                self._freeze_movement()
         elif is_long:
             # Long press: the tilt motor runs until its end stop.
             self._start_tilt_tracking(
@@ -1314,7 +1325,16 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
             # favorite, long press = memorize the current position.
             # Resolved once the press ends (_async_resolve_press).
             self._track_remote_press(command, rolling_code, repeat)
+            if self._position_estimator.is_moving:
+                # MY while moving = stop: the motor halts on the first MY
+                # frame, freeze the estimate now instead of waiting for
+                # the press to end (the deferred resolution only detects
+                # long presses and the favorite case).
+                if self._press is not None:
+                    self._press["stopped_movement"] = True
+                self._freeze_movement()
             self.async_write_ha_state()
+            self._notify_parent_groups()
             return
         if (
             self._tilt_supported
@@ -1341,10 +1361,7 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
                 self._track_members_movement("down", 0)
         elif command == SomfyCommand.STOP:
             # The motor stops, the estimate freezes where it is.
-            self._position_estimator.stop()
-            self._stop_tracking()
-            if self._is_group:
-                self._stop_members_tracking()
+            self._freeze_movement()
         elif command == SomfyCommand.STEP_UP:
             self._apply_rx_step(up=True)
             if self._is_group:

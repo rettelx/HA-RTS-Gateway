@@ -740,9 +740,14 @@ def test_rx_my_while_moving_is_a_stop(hass, no_timer, monkeypatch):
         assert entity.is_opening is True
 
         entity.async_update_from_rx(SomfyCommand.MY, 10, "remote", 0, 1)
+        # Gel immediat : le moteur s'arrete sur la premiere trame MY, HA
+        # ne doit pas attendre la fin de l'appui (TILT_PRESS_END_S).
+        assert entity.is_opening is None  # gele des la 1re trame
+        assert entity._position_estimator.is_moving is False
         await entity._press_task
         assert entity.is_opening is None  # gele
         assert entity._position_estimator.target is None  # pas de cible favorite
+        assert entity._my_position == 30  # pas de memorisation
 
     asyncio.run(scenario())
 
