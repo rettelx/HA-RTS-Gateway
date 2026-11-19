@@ -153,6 +153,21 @@ def test_cover_notifies_sensor_on_my_position_change(hass):
     assert sensor.native_value == 70.0
 
 
+def test_cover_notifies_number_on_my_position_change(hass):
+    """Le slider (should_poll=False) est pousse par le cover : pas de
+    polling HA, l'etat ne doit pas devenir stale."""
+    devices = [make_device(my_position=30)]
+    entry, numbers = setup_entities(hass, devices, number_module)
+    number = numbers[0]
+    prepare_entity(number, "number.test_set_my_position")
+    asyncio.run(number.async_added_to_hass())
+    cover = add_cover(hass, entry, devices[0])
+
+    cover.async_set_my_position(70)
+    number.async_write_ha_state.assert_called()
+    assert number.native_value == 70.0
+
+
 def test_memorize_from_rx_refreshes_sensor_and_persists(hass, no_timer):
     """Un appui long MY recu met a jour capteur + entree (chemin persistant)."""
     devices = [make_device(my_position=30, simulate_my=False)]
@@ -218,6 +233,10 @@ def test_sensor_and_number_available_without_transmitter(hass):
     prepare_entity(number, "number.test_set_my_position")
     assert number.available is True
     assert number.native_value == 86.0
+
+    # Entites push : pas de polling HA.
+    assert sensor.should_poll is False
+    assert number.should_poll is False
 
 
 def test_my_position_read_from_persisted_config_after_restart(hass):

@@ -148,7 +148,7 @@ def test_unload_last_entry_stops_handler_and_services(hass, fake_rf):
         await async_setup_entry(hass, entry)
 
         assert await async_unload_entry(hass, entry) is True
-        assert entry.entry_id not in hass.data[DOMAIN]
+        assert entry.entry_id not in hass.data[DOMAIN]["loaded_entries"]
         assert "rx_handler" not in hass.data[DOMAIN]
         assert RX_EVENT not in hass.bus.listeners
         assert not hass.services.registered  # last entry: services removed

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from typing import Any
 
 # probatio is Home Assistant's validation library, a drop-in
@@ -69,7 +68,6 @@ from .const import (
     device_type_label,
     stop_method_label,
 )
-from .rolling_code import RollingCodeStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -362,24 +360,16 @@ async def async_send_prog_press(
 ) -> None:
     """Send a PROG press of the given length on a device address."""
     address = int(device[CONF_ADDRESS])
-    store = hass.data.get(DOMAIN, {}).get("rolling_codes")
-    if store is None:
-        store = RollingCodeStore(hass)
-        hass.data.setdefault(DOMAIN, {})["rolling_codes"] = store
-    rolling_code = await store.async_get_next(address)
     await rf.async_send_command(
         hass,
         transmitter_id,
         address,
         SomfyCommand.PROG,
-        rolling_code,
         protocol=SomfyProtocol(
             device.get(CONF_PROTOCOL, SomfyProtocol.RTS_56BIT)
         ),
         frame_repeats=repeats,
     )
-    recent_tx = hass.data.setdefault(DOMAIN, {}).setdefault("recent_tx", {})
-    recent_tx[(address, rolling_code)] = time.monotonic()
 
 
 async def async_hold_prog_press(
@@ -979,28 +969,17 @@ class SomfyRTSConfigFlow(ConfigFlow, domain=DOMAIN):
             assert self._transmitter_id is not None
             address = int(self._pending_device[CONF_ADDRESS])
             try:
-                store = self.hass.data.get(DOMAIN, {}).get("rolling_codes")
-                if store is None:
-                    # The component may not be fully set up yet.
-                    store = RollingCodeStore(self.hass)
-                    self.hass.data.setdefault(DOMAIN, {})["rolling_codes"] = store
-                rolling_code = await store.async_get_next(address)
                 await rf.async_send_command(
                     self.hass,
                     self._transmitter_id,
                     address,
                     SomfyCommand.PROG,
-                    rolling_code,
                     protocol=SomfyProtocol(
                         self._pending_device.get(
                             CONF_PROTOCOL, SomfyProtocol.RTS_56BIT
                         )
                     ),
                 )
-                recent_tx = self.hass.data.setdefault(DOMAIN, {}).setdefault(
-                    "recent_tx", {}
-                )
-                recent_tx[(address, rolling_code)] = time.monotonic()
                 return await self.async_step_pair_result()
             except HomeAssistantError as err:
                 _LOGGER.warning("Pairing transmission failed: %s", err)

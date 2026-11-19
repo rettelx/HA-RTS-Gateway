@@ -45,6 +45,10 @@ class TransmitterAvailabilityMixin(Entity):
     they happen.
     """
 
+    # Push-based entities: state is written on RX events and ticks,
+    # HA must not poll them (quality scale: appropriate-polling).
+    _attr_should_poll = False
+
     _hass: HomeAssistant
     _transmitter_id: str = ""
     _last_transmitter_available: bool | None = None
@@ -52,22 +56,10 @@ class TransmitterAvailabilityMixin(Entity):
 
     @property
     def available(self) -> bool:
-        """Return whether the RF transmitter is reachable."""
-        is_available = transmitter_available(self._hass, self._transmitter_id)
-        if (
-            self._last_transmitter_available is not None
-            and is_available != self._last_transmitter_available
-        ):
-            if is_available:
-                _LOGGER.info(
-                    "%s: RF transmitter is available again", self.entity_id
-                )
-            else:
-                _LOGGER.warning(
-                    "%s: RF transmitter is unavailable", self.entity_id
-                )
-        self._last_transmitter_available = is_available
-        return is_available
+        """Return whether the entity and the RF transmitter are reachable."""
+        return super().available and transmitter_available(
+            self._hass, self._transmitter_id
+        )
 
     async def async_added_to_hass(self) -> None:
         """Track the transmitter state so availability follows it live."""
@@ -91,9 +83,24 @@ class TransmitterAvailabilityMixin(Entity):
 
     @callback
     def _async_transmitter_changed(self, event: Event[EventStateChangedData]) -> None:
-        """Rewrite the entity state on transmitter state changes.
+        """Log the availability transition once and refresh the state.
 
-        The ``available`` property recomputes on read and logs the
-        transition; writing here is what makes the UI update.
+        The ``available`` property recomputes on read; the state is
+        rewritten only on the first event or when availability actually
+        flips -- the only cases where its output changes -- which is
+        what makes the UI update.
         """
-        self.async_write_ha_state()
+        previous = self._last_transmitter_available
+        is_available = transmitter_available(self._hass, self._transmitter_id)
+        if previous is None or is_available != previous:
+            if previous is not None:
+                if is_available:
+                    _LOGGER.info(
+                        "%s: RF transmitter is available again", self.entity_id
+                    )
+                else:
+                    _LOGGER.warning(
+                        "%s: RF transmitter is unavailable", self.entity_id
+                    )
+            self.async_write_ha_state()
+        self._last_transmitter_available = is_available

@@ -97,6 +97,14 @@ def test_button_subscribes_and_recovers(hass, monkeypatch):
     assert btn.available is True
 
 
+def test_mixin_entities_do_not_poll(hass, monkeypatch):
+    """Le mixin pose _attr_should_poll = False : les entites push ne sont
+    pas pollees par HA (quality scale: appropriate-polling)."""
+    capture_tracker(monkeypatch)
+    _, entity = build_cover(hass)
+    assert entity.should_poll is False
+
+
 def test_unsubscribe_on_remove(hass, monkeypatch):
     """Le desabonnement est fait au retrait de l'entite."""
     removed: list[bool] = []

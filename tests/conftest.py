@@ -30,8 +30,14 @@ def fake_store(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def no_press_hold(monkeypatch):
-    """The wizard holds long presses out on air: no real sleeping."""
+    """The wizard holds long presses out on air: no real sleeping.
+
+    press_air_time_s=0 and TX_GAP_S=0 keep rf.async_send_command's
+    inter-burst wait at zero for the tests that call it directly with a
+    frozen time.monotonic (most tests use fake_rf, which replaces
+    async_send_command entirely)."""
     monkeypatch.setattr(rf, "press_air_time_s", lambda *args, **kwargs: 0.0)
+    monkeypatch.setattr(rf, "TX_GAP_S", 0.0)
 
 
 @pytest.fixture(autouse=True)
@@ -93,19 +99,48 @@ def fake_rf(monkeypatch):
 
 @pytest.fixture
 def no_timer(monkeypatch):
-    """Replace the position tracking timer with a manual recorder."""
+    """Replace the tracking timers with manual recorders."""
     from custom_components.rts_gateway import cover
 
-    cancels: list[bool] = []
+    timers: list[dict] = []
 
     def fake_track(hass, action, interval):
-        return lambda: cancels.append(True)
+        timer = {"action": action, "interval": interval, "cancelled": False}
+
+        def cancel():
+            timer["cancelled"] = True
+
+        timers.append(timer)
+        return cancel
 
     monkeypatch.setattr(cover, "async_track_time_interval", fake_track)
-    return cancels
+    return timers
 
 
-def make_runtime_data(entities=None, sensors=None, my_sensors=None):
+@pytest.fixture(autouse=True)
+def no_call_later(monkeypatch):
+    """Record async_call_later timers instead of scheduling them.
+
+    If cover.py ever schedules another async_call_later, tests must fire
+    the recorded action manually (e.g. entity._async_stop_timer_fired(None))."""
+    from custom_components.rts_gateway import cover
+
+    timers: list[dict] = []
+
+    def fake_call_later(hass, delay, action):
+        timer = {"delay": delay, "action": action, "cancelled": False}
+
+        def cancel():
+            timer["cancelled"] = True
+
+        timers.append(timer)
+        return cancel
+
+    monkeypatch.setattr(cover, "async_call_later", fake_call_later)
+    return timers
+
+
+def make_runtime_data(entities=None, sensors=None, my_sensors=None, my_numbers=None):
     """Runtime data stand-in matching entry.runtime_data usage."""
     from types import SimpleNamespace
 
@@ -113,4 +148,5 @@ def make_runtime_data(entities=None, sensors=None, my_sensors=None):
         entities=entities if entities is not None else {},
         sensors=sensors if sensors is not None else {},
         my_sensors=my_sensors if my_sensors is not None else {},
+        my_numbers=my_numbers if my_numbers is not None else {},
     )

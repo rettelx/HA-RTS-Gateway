@@ -147,7 +147,8 @@ def test_open_close_stop_send_commands(hass, fake_rf, no_timer):
         assert fake_rf.sent[-1]["command"] == "DOWN"
         assert entity.is_closing is True
 
-        assert no_timer  # tracking was started and stopped
+        # tracking was started (the close movement is still in progress)
+        assert no_timer
 
     asyncio.run(scenario())
 
@@ -174,6 +175,298 @@ def test_set_cover_position(hass, fake_rf, no_timer):
     asyncio.run(scenario())
 
 
+def test_set_position_near_end_stop_schedules_precise_stop(
+    hass, fake_rf, no_timer, no_call_later, monkeypatch
+):
+    """Regression: une cible a 1 % d'une butee ne doit pas attendre le
+    prochain tick de securite pour envoyer le STOP (overshoot pouvant
+    aller jusqu'a 0,25 s de course, pire si le STOP se perd dans des
+    bursts qui se chevauchent)."""
+    async def scenario():
+        entity = build_cover(hass, open_time_ms=20000, close_time_ms=20000)
+        await entity.async_added_to_hass()
+        entity._position_estimator.restore(100)
+
+        base = 4096.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        await entity.async_set_cover_position(position=99)
+
+        # 1 % de 20 s = 0,2 s : le STOP est programme a 0,2 s.
+        assert [f["command"] for f in fake_rf.sent] == ["DOWN"]
+        assert len(no_call_later) == 1
+        assert no_call_later[0]["delay"] == pytest.approx(0.2)
+
+        # Le timer se declenche : STOP radio, snap a 99, mouvement fini.
+        await entity._async_stop_timer_fired(None)
+        assert [f["command"] for f in fake_rf.sent] == ["DOWN", "STOP"]
+        assert entity.current_cover_position == 99
+        assert entity._position_estimator.is_moving is False
+        # Le tick de securite ne re-envoie pas de STOP apres le timer.
+        await entity._async_movement_tick(None)
+        assert [f["command"] for f in fake_rf.sent] == ["DOWN", "STOP"]
+
+    asyncio.run(scenario())
+
+
+def test_display_and_safety_ticks_are_separate(hass, fake_rf, no_timer, no_call_later, monkeypatch):
+    """Le tick d'affichage ne rafraichit que l'UI ; le tick de securite
+    (0,25 s) porte la logique de STOP, sans write de routine."""
+    async def scenario():
+        entity = build_cover(hass, open_time_ms=20000, close_time_ms=20000)
+        await entity.async_added_to_hass()
+        entity._position_estimator.restore(100)
+
+        base = 4096.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        await entity.async_set_cover_position(position=50)
+
+        # Deux timers : display + safety, tous deux a 0,25 s.
+        intervals = sorted(t["interval"].total_seconds() for t in no_timer)
+        assert intervals == [0.25, 0.25]
+        names = sorted(getattr(t["action"], "__name__", "") for t in no_timer)
+        assert names == ["_async_display_tick", "_async_movement_tick"]
+
+        # Le safety tick en cours de mouvement n'ecrit pas l'etat.
+        entity.async_write_ha_state.reset_mock()
+        monkeypatch.setattr(time, "monotonic", lambda: base + 0.25)
+        await entity._async_movement_tick(None)
+        assert entity.async_write_ha_state.called is False
+        assert entity._position_estimator.is_moving is True
+
+        # Le display tick rafraichit l'etat pendant le mouvement.
+        entity._async_display_tick(None)
+        assert entity.async_write_ha_state.called is True
+
+        # Le safety tick envoie le STOP quand la cible est atteinte,
+        # puis arrete les deux timers.
+        monkeypatch.setattr(time, "monotonic", lambda: base + 10.0)
+        await entity._async_movement_tick(None)
+        assert [f["command"] for f in fake_rf.sent] == ["DOWN", "STOP"]
+        assert entity.current_cover_position == 50
+        assert all(t["cancelled"] for t in no_timer)
+
+    asyncio.run(scenario())
+
+
+def test_group_stop_gives_up_after_max_retries(hass, fake_rf, no_timer, caplog, monkeypatch):
+    """A group stop frame that keeps failing gives up after
+    GROUP_STOP_MAX_RETRIES attempts: estimator frozen, timers cancelled."""
+    async def scenario():
+        import logging
+
+        from custom_components.rts_gateway.cover import GROUP_STOP_MAX_RETRIES
+
+        caplog.set_level(logging.WARNING)
+        group, members = build_group_with_members(hass)
+        for m in members:
+            m._position_estimator.restore(100)
+        group._position_estimator.restore(100)
+
+        async def boom():
+            raise HomeAssistantError("radio down")
+
+        monkeypatch.setattr(group, "_async_stop_at_target", boom)
+
+        base = 4096.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        group._position_estimator.start("down", 50)
+        group._start_tracking()
+
+        # Members reach their target after 1 s (travel 1000 ms).
+        monkeypatch.setattr(time, "monotonic", lambda: base + 1.0)
+        for _ in range(GROUP_STOP_MAX_RETRIES):
+            await group._async_movement_tick(None)
+
+        assert group._position_estimator.is_moving is False
+        assert group._position_estimator.position == 50  # snap a la cible
+        assert all(t["cancelled"] for t in no_timer)
+        assert f"after {GROUP_STOP_MAX_RETRIES} attempts" in caplog.text
+
+    asyncio.run(scenario())
+
+
+def test_stop_timer_fired_not_moving_is_noop(hass, fake_rf, no_timer, no_call_later):
+    """Branche 650: timer fired while idle -> rien."""
+    async def scenario():
+        entity = build_cover(hass)
+        await entity.async_added_to_hass()
+        entity._position_estimator.restore(50)
+        await entity._async_stop_timer_fired(None)
+        assert fake_rf.sent == []
+        assert entity._position_estimator.is_moving is False
+
+    asyncio.run(scenario())
+
+
+def test_stop_timer_fired_send_failure_keeps_tracking(
+    hass, fake_rf, no_timer, no_call_later, caplog, monkeypatch
+):
+    """Branche 655-658: echec d'envoi du STOP -> le mouvement reste tracke,
+    le safety tick retente. Aucun STOP emis."""
+    async def scenario():
+        import logging
+
+        caplog.set_level(logging.WARNING)
+        entity = build_cover(hass, open_time_ms=20000, close_time_ms=20000)
+        await entity.async_added_to_hass()
+        entity._position_estimator.restore(100)
+
+        base = 4096.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        await entity.async_set_cover_position(position=50)
+        token = entity._position_estimator.started_at
+
+        async def boom():
+            raise HomeAssistantError("radio down")
+
+        monkeypatch.setattr(entity, "_async_stop_at_target", boom)
+        await entity._async_stop_timer_fired(None, started_at=token)
+        assert entity._position_estimator.is_moving is True
+        assert [f["command"] for f in fake_rf.sent] == ["DOWN"]
+        assert "Failed to stop" in caplog.text
+
+    asyncio.run(scenario())
+
+
+def test_stop_timer_fired_superseded_movement_is_ignored(
+    hass, fake_rf, no_timer, no_call_later, monkeypatch
+):
+    """Branche 660: un mouvement plus recent a remplace celui du timer
+    (token capture au schedule time) -> pas de STOP, pas de snap."""
+    async def scenario():
+        entity = build_cover(hass, open_time_ms=20000, close_time_ms=20000)
+        await entity.async_added_to_hass()
+        entity._position_estimator.restore(100)
+
+        base = 4096.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        await entity.async_set_cover_position(position=50)
+        token = entity._position_estimator.started_at
+
+        # Nouveau mouvement avant le fire de l'ancien timer.
+        entity._position_estimator.start("up", 100)
+        await entity._async_stop_timer_fired(None, started_at=token)
+        assert entity._position_estimator.is_moving is True
+        assert entity._position_estimator.direction == "up"
+        assert [f["command"] for f in fake_rf.sent] == ["DOWN"]
+
+    asyncio.run(scenario())
+
+
+def test_stop_timer_fired_on_group_waits_for_members_and_stops_them(
+    hass, fake_rf, no_timer, no_call_later, monkeypatch
+):
+    """Branche groupe: le STOP groupe n'est envoye que quand tous les
+    membres ont atteint leur cible, puis les membres sont geles."""
+    async def scenario():
+        group, members = build_group_with_members(hass)
+        for m in members:
+            m._position_estimator.restore(0)  # not moving -> reached
+        group._position_estimator.restore(100)
+
+        base = 4096.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        group._position_estimator.start("down", 50)
+        group._start_tracking()
+        for m in members:
+            m.async_track_group_movement("down", 50)
+        token = group._position_estimator.started_at
+
+        # Un membre n'a pas encore atteint sa cible -> pas de STOP.
+        members[0]._position_estimator.restore(100)
+        members[0]._position_estimator.start("down", 50)
+        await group._async_stop_timer_fired(None, started_at=token)
+        assert fake_rf.sent == []
+        assert group._position_estimator.is_moving is True
+
+        # Tous les membres atteints -> STOP sur l'adresse du groupe,
+        # membres geles.
+        monkeypatch.setattr(time, "monotonic", lambda: base + 2.0)
+        await group._async_stop_timer_fired(None, started_at=token)
+        assert [(f["address"], f["command"]) for f in fake_rf.sent] == [
+            (1500000, "STOP")
+        ]
+        assert group._position_estimator.is_moving is False
+        for m in members:
+            assert m._position_estimator.is_moving is False
+            assert m._shadow_tracking is False
+
+    asyncio.run(scenario())
+
+
+def test_movement_tick_send_failure_snaps_to_target(
+    hass, fake_rf, no_timer, no_call_later, monkeypatch
+):
+    """Echec du STOP au tick de securite : on fige a la CIBLE (50), pas a
+    l'overshoot (0 a +20 s) -- sinon le prochain goto partirait du mauvais
+    point et inverserait le moteur."""
+    async def scenario():
+        entity = build_cover(hass, open_time_ms=20000, close_time_ms=20000)
+        await entity.async_added_to_hass()
+        entity._position_estimator.restore(100)
+
+        base = 4096.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        await entity.async_set_cover_position(position=50)
+
+        async def boom():
+            raise HomeAssistantError("radio down")
+
+        from custom_components.rts_gateway.cover import GROUP_STOP_MAX_RETRIES
+
+        monkeypatch.setattr(entity, "_async_stop_at_target", boom)
+        monkeypatch.setattr(time, "monotonic", lambda: base + 20.0)
+        for _ in range(GROUP_STOP_MAX_RETRIES):
+            await entity._async_movement_tick(None)
+        assert entity._position_estimator.is_moving is False
+        assert entity._position_estimator.position == 50
+        assert entity.current_cover_position == 50
+
+    asyncio.run(scenario())
+
+
+def test_stop_timer_superseded_before_send_does_not_air(
+    hass, fake_rf, no_timer, no_call_later, monkeypatch
+):
+    """Mouvement intermediaire plus recent : le check de token PRE-send
+    empeche le STOP de s'envoler (l'ancien code n'avait le check
+    qu'apres l'envoi radio)."""
+    async def scenario():
+        entity = build_cover(hass, open_time_ms=20000, close_time_ms=20000)
+        await entity.async_added_to_hass()
+        entity._position_estimator.restore(100)
+
+        base = 4096.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        await entity.async_set_cover_position(position=50)
+        token = entity._position_estimator.started_at
+
+        # Nouveau mouvement intermediaire avant le fire de l'ancien timer
+        # (horloge avancee : nouveau token de generation).
+        monkeypatch.setattr(time, "monotonic", lambda: base + 1.0)
+        entity._position_estimator.start("down", 30)
+        await entity._async_stop_timer_fired(None, started_at=token)
+        assert [f["command"] for f in fake_rf.sent] == ["DOWN"]  # pas de STOP
+        assert entity._position_estimator.is_moving is True
+        assert entity._position_estimator.direction == "down"
+
+    asyncio.run(scenario())
+
+
+def test_set_position_end_stop_schedules_no_stop_timer(hass, fake_rf, no_timer, no_call_later):
+    """Une cible de butee (0/100) ne programme aucun STOP radio."""
+    async def scenario():
+        entity = build_cover(hass)
+        await entity.async_added_to_hass()
+        entity._position_estimator.restore(0)
+
+        await entity.async_set_cover_position(position=100)
+        assert [f["command"] for f in fake_rf.sent] == ["UP"]
+        assert no_call_later == []
+
+    asyncio.run(scenario())
+
+
 def test_tick_sends_stop_at_intermediate_target(hass, fake_rf, no_timer):
     async def scenario():
         entity = build_cover(hass)
@@ -190,7 +483,7 @@ def test_tick_sends_stop_at_intermediate_target(hass, fake_rf, no_timer):
 
         assert fake_rf.sent[-1]["command"] == "STOP"
         assert est.direction is None
-        assert no_timer  # timer cancelled
+        assert no_timer and all(t["cancelled"] for t in no_timer)
 
     asyncio.run(scenario())
 
@@ -1106,10 +1399,19 @@ def test_setup_entry_filters_cover_types(hass):
     assert isinstance(added[0], cover_module.SomfyRTSCover)
 
 
+def test_cover_does_not_poll(hass):
+    """Entite push (etat ecrit sur events/ticks) : HA ne doit pas la poller."""
+    entity = build_cover(hass)
+    assert entity.should_poll is False
+
+
 def test_entity_name_is_none(hass):
     """Le nom vient de l'appareil (has_entity_name)."""
+    from homeassistant.helpers.typing import UNDEFINED
+
     entity = build_cover(hass)
-    assert entity.name is None
+    assert entity._attr_has_entity_name is True
+    assert entity.name is UNDEFINED  # no own name: the device name is used
 
 
 def test_will_remove_cancels_recalibration(hass, fake_rf, no_timer):
@@ -1170,7 +1472,10 @@ def test_movement_tick_stop_failure_logs(hass, fake_rf, no_timer, monkeypatch, c
 
         await entity.async_set_cover_position(position=30)
         entity._position_estimator._started_at -= 60
-        await entity._async_movement_tick(None)
+        from custom_components.rts_gateway.cover import GROUP_STOP_MAX_RETRIES
+
+        for _ in range(GROUP_STOP_MAX_RETRIES):
+            await entity._async_movement_tick(None)
         assert "Failed to stop" in caplog.text
         assert not entity._position_estimator.is_moving
 
@@ -1330,12 +1635,15 @@ def test_available_follows_transmitter(hass, caplog):
         "radio_frequency.test_radio", SimpleNamespace(state="on")
     )
     assert entity.available is True
+    entity._async_transmitter_changed(SimpleNamespace(data={}))
+    assert "RF transmitter" not in caplog.text  # premier event: pas de log
 
     # Emetteur indisponible -> entite indisponible, log unique.
     hass.states.set(
         "radio_frequency.test_radio", SimpleNamespace(state="unavailable")
     )
     assert entity.available is False
+    entity._async_transmitter_changed(SimpleNamespace(data={}))
     assert "RF transmitter is unavailable" in caplog.text
     assert caplog.text.count("RF transmitter is unavailable") == 1
 
@@ -1344,7 +1652,13 @@ def test_available_follows_transmitter(hass, caplog):
         "radio_frequency.test_radio", SimpleNamespace(state="on")
     )
     assert entity.available is True
+    entity._async_transmitter_changed(SimpleNamespace(data={}))
     assert "RF transmitter is available again" in caplog.text
+
+    # Evenement sans changement de disponibilite -> pas de reecriture.
+    entity.async_write_ha_state.reset_mock()
+    entity._async_transmitter_changed(SimpleNamespace(data={}))
+    assert entity.async_write_ha_state.called is False
 
 
 def test_unavailable_without_transmitter_state(hass):
@@ -1502,7 +1816,7 @@ def test_group_native_my_retries_stop_after_failure(
         real_send = rf.async_send_command
         broken = True
 
-        async def flaky(hass, transmitter_id, address, command, code, **kw):
+        async def flaky(hass, transmitter_id, address, command, code=None, **kw):
             if broken and command == SomfyCommand.STOP:
                 raise HomeAssistantError("gateway down")
             await real_send(hass, transmitter_id, address, command, code, **kw)
@@ -1620,6 +1934,32 @@ def test_group_commands_move_members(hass, fake_rf, no_timer):
     asyncio.run(scenario())
 
 
+def test_group_set_position_end_stop_uses_group_address(hass, fake_rf, no_timer):
+    """set 0/100 sur le groupe : une seule trame sur l'adresse du
+    groupe (comme open/close), les membres suivent en miroir. Pas de
+    commande individuelle par membre pour une butee."""
+    async def scenario():
+        group, members = build_group_with_members(hass)
+        for m in members:
+            m._position_estimator.restore(0)
+
+        await group.async_set_cover_position(position=100)
+        assert [(f["address"], f["command"]) for f in fake_rf.sent] == [
+            (1500000, "UP")
+        ]
+        for m in members:
+            assert m._shadow_tracking is True
+            assert m.is_opening
+
+        fake_rf.sent.clear()
+        await group.async_set_cover_position(position=0)
+        assert [(f["address"], f["command"]) for f in fake_rf.sent] == [
+            (1500000, "DOWN")
+        ]
+
+    asyncio.run(scenario())
+
+
 def test_group_position_commands_each_member(hass, fake_rf, no_timer, monkeypatch):
     """Une cible intermediaire : chaque membre est commande separement.
 
@@ -1629,7 +1969,7 @@ def test_group_position_commands_each_member(hass, fake_rf, no_timer, monkeypatc
     le CoverGroup natif de HA et ESPSomfyRTS."""
     async def scenario():
         group, members = build_group_with_members(hass)
-        # Vitesses egales pour un arret deterministe au tick de 1 s.
+        # Vitesses egales pour un arret deterministe au tick de securite.
         members[1]._position_estimator.set_travel_times(1000, 1000)
 
         base = 4096.0
@@ -1660,12 +2000,182 @@ def test_group_position_commands_each_member(hass, fake_rf, no_timer, monkeypatc
     asyncio.run(scenario())
 
 
+def test_group_position_skips_members_already_at_target(
+    hass, fake_rf, no_timer, monkeypatch
+):
+    """Membre deja a la cible intermediaire : aucune trame pour lui,
+    aucun sleep inter-bursts inutile."""
+    async def scenario():
+        group, members = build_group_with_members(hass)
+        members[0]._position_estimator.restore(50)  # deja a 50
+        members[1]._position_estimator.restore(100)
+
+        base = 4096.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        await group.async_set_cover_position(position=50)
+        # Seul le membre 1 (a 100) recoit une commande.
+        assert [f["address"] for f in fake_rf.sent] == [10000001]
+        assert members[0]._position_estimator.is_moving is False
+        assert members[1].is_closing
+
+    asyncio.run(scenario())
+
+
+def test_group_position_stop_timers_account_for_queued_bursts(
+    hass, fake_rf, no_timer, no_call_later, monkeypatch
+):
+    """Cible intermediaire d'un groupe : le STOP d'un membre s'aligne sur
+    les bursts des membres suivants (queue partagee sur l'emetteur) --
+    queue_delay_s = somme des slots des membres commandes apres lui."""
+    async def scenario():
+        travel = {"open_time_ms": 20000, "close_time_ms": 20000}
+        group, members = build_group_with_members(
+            hass, members_config=[travel, travel, travel]
+        )
+        # conftest met le gap a 0 : le retablir pour des slots non nuls.
+        # Pas de gel de time.monotonic ici : le sleep inter-bursts reel
+        # bloquerait la boucle d'events (horloge figee).
+        monkeypatch.setattr(cover_module, "GROUP_MEMBER_FRAME_GAP_S", 0.2)
+        for m in members:
+            m._position_estimator.restore(100)
+
+        # TX_GAP_S non nul pour que les stop slots soient visibles.
+        monkeypatch.setattr(rf, "TX_GAP_S", 0.1)
+        await group.async_set_cover_position(position=99)
+
+        # 3 membres commandes (ci-dessus), aucun STOP groupe.
+        assert [f["address"] for f in fake_rf.sent] == [10000000, 10000001, 10000002]
+        # remaining = 0,2 s ; slot direction = 0 + 0,2 s de gap ;
+        # stop slot = 0 + TX_GAP_S (0,1 ici). Delais : max(remaining,
+        # min_air + queue) avec queue = suffix des slots de direction
+        # des membres suivants + prefix des stop slots des precedents :
+        # m0: 0.1 + (0.2+0.2) + 0     -> 0.5 ; m1: 0.1 + 0.2 + 0.1 -> 0.4 ;
+        # m2: 0.1 + 0 + (0.1+0.1)     -> 0.3.
+        delays = [t["delay"] for t in no_call_later]
+        assert delays == [pytest.approx(0.5), pytest.approx(0.4), pytest.approx(0.3)]
+
+    asyncio.run(scenario())
+
+
+def test_movement_tick_superseded_during_send_is_not_snapped(
+    hass, fake_rf, no_timer, no_call_later, monkeypatch
+):
+    """Un nouveau mouvement demarre pendant l'attente du lock TX dans le
+    tick de securite : le tick perime ne doit NI rien snaper NI tuer les
+    timers du nouveau mouvement (garde de token)."""
+    async def scenario():
+        entity = build_cover(hass, open_time_ms=20000, close_time_ms=20000)
+        await entity.async_added_to_hass()
+        entity._position_estimator.restore(100)
+
+        base = 4096.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        await entity.async_set_cover_position(position=50)
+
+        async def fake_stop():
+            # Nouveau mouvement pendant l'envoi du STOP.
+            monkeypatch.setattr(time, "monotonic", lambda: base + 1.0)
+            entity._position_estimator.start("up", 100)
+
+        monkeypatch.setattr(entity, "_async_stop_at_target", fake_stop)
+        monkeypatch.setattr(time, "monotonic", lambda: base + 20.0)
+        await entity._async_movement_tick(None)
+        assert entity._position_estimator.is_moving is True
+        assert entity._position_estimator.direction == "up"
+        assert entity._position_estimator.position != 50  # pas snappe a 50
+
+    asyncio.run(scenario())
+
+
+def test_stop_timer_fired_after_removal_does_nothing(
+    hass, fake_rf, no_timer, no_call_later, monkeypatch
+):
+    """Timer en vol au moment du retrait de l'entite : aucun STOP radio,
+    aucune ecriture d'etat (garde _removed)."""
+    async def scenario():
+        entity = build_cover(hass, open_time_ms=20000, close_time_ms=20000)
+        await entity.async_added_to_hass()
+        entity._position_estimator.restore(100)
+
+        base = 4096.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        await entity.async_set_cover_position(position=50)
+
+        entity._removed = True
+        entity.async_write_ha_state.reset_mock()
+        await entity._async_stop_timer_fired(None)
+        assert [f["command"] for f in fake_rf.sent] == ["DOWN"]  # pas de STOP
+        assert entity.async_write_ha_state.called is False
+
+    asyncio.run(scenario())
+
+
+def test_movement_tick_after_removal_does_nothing(
+    hass, fake_rf, no_timer, no_call_later, monkeypatch
+):
+    """Tick de securite dispatché puis entite retirée : aucun STOP radio,
+    aucune ecriture (garde _removed en entree de tick)."""
+    async def scenario():
+        entity = build_cover(hass, open_time_ms=20000, close_time_ms=20000)
+        await entity.async_added_to_hass()
+        entity._position_estimator.restore(100)
+
+        base = 4096.0
+        monkeypatch.setattr(time, "monotonic", lambda: base)
+        await entity.async_set_cover_position(position=50)
+
+        entity._removed = True
+        entity.async_write_ha_state.reset_mock()
+        monkeypatch.setattr(time, "monotonic", lambda: base + 20.0)
+        await entity._async_movement_tick(None)
+        assert [f["command"] for f in fake_rf.sent] == ["DOWN"]  # pas de STOP
+        assert entity.async_write_ha_state.called is False
+
+    asyncio.run(scenario())
+
+
+def test_open_cover_during_unload_does_not_restart_tracking(
+    hass, fake_rf, no_timer, monkeypatch
+):
+    """Unload pendant l'attente du lock TX dans async_open_cover : le
+    handler ne doit ni relancer l'estimateur ni reecrire l'etat."""
+    async def scenario():
+        entity = build_cover(hass)
+        await entity.async_added_to_hass()
+
+        async def fake_transmit(command, frame_repeats, step_size=None):
+            entity._removed = True  # le retrait a lieu pendant l'envoi
+
+        monkeypatch.setattr(entity, "_async_transmit", fake_transmit)
+        entity.async_write_ha_state.reset_mock()
+        await entity.async_open_cover()
+        assert entity._position_estimator.is_moving is False
+        assert entity.async_write_ha_state.called is False
+        assert no_timer == []
+
+    asyncio.run(scenario())
+
+
+def test_direct_command_clears_shadow_tracking(hass, fake_rf, no_timer):
+    """Une commande directe sur un membre en shadow tracking arrete le
+    mode miroir (sinon le tick de securite figerait sans radio)."""
+    async def scenario():
+        _, members = build_group_with_members(hass)
+        member = members[0]
+        member.async_track_group_movement("down", 50)
+        assert member._shadow_tracking is True
+        await member.async_open_cover()
+        assert member._shadow_tracking is False
+
+    asyncio.run(scenario())
+
+
 def test_group_close_does_not_freeze_members(hass, fake_rf, no_timer, monkeypatch):
     """Regression : une fermeture du groupe ne fige plus les membres.
 
     L'estimateur interne du groupe peut etre perime (rest'e a 0 depuis
     une ancienne fermeture) : le tick du groupe atteignait sa cible des
-    le premier tick et gelait tous les membres a ~1 s de leur propre
+    le premier tick et gelait tous les membres tot dans leur propre
     course, alors que les moteurs faisaient la descente complete
     (incident 2026-10-25 : volets affiches a 93-94 % toute la nuit).
     """
@@ -1911,7 +2421,7 @@ def test_goto_my_position_is_idempotent(hass, fake_rf, no_timer):
         for _ in range(3):
             await entity.async_goto_my_position()
             est = entity._position_estimator
-            # Ticks de 1 s jusqu'a l'arret du mouvement.
+            # Ticks jusqu'a l'arret du mouvement.
             for _ in range(60):
                 if not est.is_moving:
                     break

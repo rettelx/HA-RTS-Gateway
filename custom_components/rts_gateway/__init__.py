@@ -66,6 +66,7 @@ class SomfyRTSRuntimeData:
     entities: dict[str, Any] = field(default_factory=dict)
     sensors: dict[Any, Any] = field(default_factory=dict)
     my_sensors: dict[str, Any] = field(default_factory=dict)
+    my_numbers: dict[str, Any] = field(default_factory=dict)
 
 
 def _rx_enabled(entry: ConfigEntry) -> bool:
@@ -201,5 +202,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     if not loaded:
         await async_unload_services(hass)
+        # tx_air/recent_tx are intentionally kept: an in-flight send may
+        # still hold the per-transmitter lock, and the absolute loopback
+        # deadlines must survive a reload (recent_tx self-prunes).
 
     return True

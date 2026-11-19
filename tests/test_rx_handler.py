@@ -13,7 +13,7 @@ from homeassistant.core import Event
 from custom_components.rts_gateway.const import (
     DOMAIN,
     RX_EVENT,
-    TX_LOOPBACK_TTL,
+    TX_LOOPBACK_MARGIN_S,
     SomfyCommand,
 )
 from custom_components.rts_gateway.rx_handler import SomfyRTSRxHandler
@@ -95,13 +95,13 @@ def test_loopback_of_own_transmissions_is_ignored(hass):
     entity = make_entity(address_int=1000)
     handler = make_handler(hass, entities=[entity])
     recent_tx = hass.data[DOMAIN].setdefault("recent_tx", {})
-    recent_tx[(1000, 5)] = time.monotonic()
+    recent_tx[(1000, 5)] = time.monotonic() + TX_LOOPBACK_MARGIN_S
 
     fire(handler, address=1000, command=2, rolling_code=5)
     entity.async_update_from_rx.assert_not_called()
 
     # The same (address, code) received after the loopback window passes.
-    recent_tx[(1000, 5)] = time.monotonic() - TX_LOOPBACK_TTL - 1
+    recent_tx[(1000, 5)] = time.monotonic() - 1  # deadline passee
     fire(handler, address=1000, command=2, rolling_code=5)
     entity.async_update_from_rx.assert_called_once()
 
@@ -180,10 +180,10 @@ def test_recent_tx_is_pruned(hass):
     recent_tx = hass.data[DOMAIN].setdefault("recent_tx", {})
     now = time.monotonic()
     for i in range(300):
-        recent_tx[(i, i)] = now - TX_LOOPBACK_TTL - 1
+        recent_tx[(i, i)] = now - 1  # deadline passee
 
     fire(handler, address=1000, command=2, rolling_code=5)
-    assert len(recent_tx) <= 2  # stale entries dropped
+    assert len(recent_tx) == 0  # all stale deadlines pruned
     entity.async_update_from_rx.assert_called_once()
 
 
@@ -226,7 +226,7 @@ def test_frame_event_gateway_loopback(hass):
     entity = make_entity(address_int=1000)
     handler = make_handler(hass, entities=[entity])
     recent_tx = hass.data[DOMAIN].setdefault("recent_tx", {})
-    recent_tx[(1000, 5)] = time.monotonic()
+    recent_tx[(1000, 5)] = time.monotonic() + TX_LOOPBACK_MARGIN_S
 
     fire(handler, address=1000, command=2, rolling_code=5)
     events = [e for e in hass.bus.events if e["type"] == EVENT_FRAME]
@@ -283,7 +283,7 @@ def test_recent_addresses_tracks_remotes(hass):
 def test_recent_addresses_excludes_gateway_loopback(hass):
     handler = make_handler(hass, entities=[])
     recent_tx = hass.data[DOMAIN].setdefault("recent_tx", {})
-    recent_tx[(1234567, 1)] = time.monotonic()
+    recent_tx[(1234567, 1)] = time.monotonic() + TX_LOOPBACK_MARGIN_S
     fire(handler, address=1234567, command=2, rolling_code=1)
 
     assert handler.recent_addresses() == []
@@ -336,7 +336,7 @@ def test_frame_event_gateway_loopback_fired_once_per_press(hass):
     entity = make_entity(address_int=1000)
     handler = make_handler(hass, entities=[entity])
     recent_tx = hass.data[DOMAIN].setdefault("recent_tx", {})
-    recent_tx[(1000, 5)] = time.monotonic()
+    recent_tx[(1000, 5)] = time.monotonic() + TX_LOOPBACK_MARGIN_S
 
     fire(handler, address=1000, command=2, rolling_code=5)
     fire(handler, address=1000, command=2, rolling_code=5)

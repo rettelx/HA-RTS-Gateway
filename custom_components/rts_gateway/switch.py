@@ -13,7 +13,6 @@ when a linked physical remote sends the toggle command over the air.
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any
 
 from homeassistant.components.switch import (
@@ -42,7 +41,6 @@ from .const import (
     SomfyDeviceType,
     SomfyProtocol,
 )
-from .rolling_code import RollingCodeStore
 
 # Radio actions are serialized per entity to avoid overlapping bursts.
 PARALLEL_UPDATES = 1
@@ -87,7 +85,6 @@ class SomfyRTSSwitch(TransmitterAvailabilityMixin, SwitchEntity, RestoreEntity):
         self._hass = hass
         self._entry = entry
         self._device_config = device_config
-        self._store: RollingCodeStore = hass.data[DOMAIN]["rolling_codes"]
 
         self._address = str(device_config[CONF_ADDRESS])
         self._address_int = int(self._address)
@@ -155,17 +152,13 @@ class SomfyRTSSwitch(TransmitterAvailabilityMixin, SwitchEntity, RestoreEntity):
 
     async def _async_send_command(self, command: SomfyCommand) -> None:
         """Send a command through the RF transmitter."""
-        rolling_code = await self._store.async_get_next(self._address_int)
-        await rf.async_send_command(
+        rolling_code = await rf.async_send_command(
             self._hass,
             self._transmitter_id,
             self._address_int,
             command,
-            rolling_code,
             protocol=self._protocol,
         )
-        recent_tx = self._hass.data[DOMAIN].setdefault("recent_tx", {})
-        recent_tx[(self._address_int, rolling_code)] = time.monotonic()
         _LOGGER.debug(
             "Sent %s to %s (rolling code %d)",
             command.value,

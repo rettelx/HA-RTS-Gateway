@@ -58,6 +58,7 @@ class SomfyRTSMyPositionNumber(NumberEntity):
     """
 
     _attr_has_entity_name = True
+    _attr_should_poll = False  # pure config value, pushed by the cover
     _attr_translation_key = "set_my_position"
     _attr_mode = NumberMode.SLIDER
     _attr_native_min_value = 0.0
@@ -80,6 +81,16 @@ class SomfyRTSMyPositionNumber(NumberEntity):
         # Instance property, see sensor.py / button.py.
         self._attr_unique_id = f"{DOMAIN}_{self._address}_{self.translation_key}"
         self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, self._address)})
+
+    async def async_added_to_hass(self) -> None:
+        """Register the slider so the cover can refresh it on change."""
+        await super().async_added_to_hass()
+        self._entry.runtime_data.my_numbers[self._address] = self
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister the slider."""
+        self._entry.runtime_data.my_numbers.pop(self._address, None)
+        await super().async_will_remove_from_hass()
 
     @property
     def native_value(self) -> float | None:

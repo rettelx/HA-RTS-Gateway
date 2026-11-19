@@ -361,6 +361,9 @@ DEVICE_ADDRESS_MAX = 16777215  # 0xFFFFFF (24 bits)
 GROUP_ADDRESS_MIN = 1000000
 GROUP_ADDRESS_MAX = 2097151
 RX_DUPLICATE_TTL = 1.5  # seconds
-# Window during which frames identical to our own transmissions are ignored
-# (the gateway's CC1101 hears the frames we transmit).
-TX_LOOPBACK_TTL = 3.0  # seconds
+# Margin AFTER a burst's computed air time during which its echo is still
+# filtered as loopback (the gateway's CC1101 hears the frames we transmit).
+# rf.async_send_command stamps recent_tx[(address, code)] with the absolute
+# deadline now + air_time + this margin, so even a long burst's echo tail is
+# never mistaken for a remote press.
+TX_LOOPBACK_MARGIN_S = 3.0

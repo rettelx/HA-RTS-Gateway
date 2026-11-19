@@ -233,11 +233,20 @@ class FakeRF:
         transmitter_id,
         address,
         command,
-        rolling_code,
+        rolling_code=None,
         protocol=SomfyProtocol.RTS_56BIT,
         frame_repeats=3,
         step_size=DEFAULT_STEP_SIZE,
     ):
+        if rolling_code is None:
+            from custom_components.rts_gateway.rolling_code import RollingCodeStore
+
+            data = hass.data.setdefault("rts_gateway", {})
+            store = data.get("rolling_codes")
+            if store is None:
+                store = RollingCodeStore(hass)
+                data["rolling_codes"] = store
+            rolling_code = await store.async_get_next(address)
         self.sent.append(
             {
                 "transmitter_id": transmitter_id,

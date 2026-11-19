@@ -6,7 +6,8 @@ import asyncio
 import logging
 import time
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
+from functools import partial
 from typing import Any
 
 from homeassistant.components.cover import (
@@ -14,11 +15,11 @@ from homeassistant.components.cover import (
     CoverEntityFeature,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import async_call_later, async_track_time_interval
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from . import rf
@@ -67,21 +68,31 @@ from .const import (
     SomfyProtocol,
     device_type_label,
 )
-from .rolling_code import RollingCodeStore
 
 # Radio actions are serialized per entity to avoid overlapping bursts.
 PARALLEL_UPDATES = 1
 _LOGGER = logging.getLogger(__name__)
 
-UPDATE_INTERVAL = timedelta(seconds=1)
+# Display refresh cadence while moving. The position is a
+# live-computed property, so the tick only pushes it to the state
+# machine; 0.25 s keeps the UI close to the real movement instead of
+# jumping in 1 s steps (~5 % per step on a 20 s travel).
+DISPLAY_UPDATE_INTERVAL = timedelta(seconds=0.25)
+# Safety-net cadence of the movement tick. The precise stop timer
+# fires at the exact estimated target time; this tick only retries a
+# late/failed stop frame, shrinking the residual overshoot.
+SAFETY_TICK_INTERVAL = timedelta(seconds=0.25)
 # Breathing room between the radio bursts of a group's member
 # commands: back-to-back bursts flap the CC1101 between RX and TX
 # and frames get lost (see the warning in esphome.yaml). Spacing
 # the direction presses also staggers each member's stop frame.
 GROUP_MEMBER_FRAME_GAP_S = 0.2
 # Direction presses of a group command use a single repeat (the
-# encoder double-sends it): ~0.4 s on air, like a physical remote.
+# encoder sends the burst repeat_count+1 times): ~1.05 s on air, like a
+# physical remote.
 GROUP_MEMBER_FRAME_REPEATS = 1
+# Max attempts of the group radio stop frame before giving up
+GROUP_STOP_MAX_RETRIES = 5
 # Update cadence of the timed tilt estimate (56-bit tilt motors)
 _TILT_TIMED_TICK_S = 0.25
 # Poll cadence while waiting for a remote press to end
@@ -156,6 +167,16 @@ class PositionEstimator:
         """Return the position target, if any."""
         return self._target
 
+    @property
+    def started_at(self) -> float | None:
+        """Monotonic start time of the current movement (generation token)."""
+        return self._started_at
+
+    @property
+    def start_position(self) -> int:
+        """Frozen position at which the current movement started."""
+        return self._start_position
+
     def reached_target(self) -> bool:
         """Return whether the movement has reached its target or end stop."""
         if not self.is_moving:
@@ -194,7 +215,7 @@ class PositionEstimator:
     def stop_at(self, target: int) -> None:
         """Stop tracking and snap to an intermediate target.
 
-        The last 1 s tick may have overshot the target; freezing on
+        The last safety tick may have overshot the target; freezing on
         the overshoot would make the next goto start from the wrong
         position and reverse the motor (alternating positions).
         """
@@ -235,7 +256,6 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         self._hass = hass
         self._entry = entry
         self._device_config = device_config
-        self._store: RollingCodeStore = hass.data[DOMAIN]["rolling_codes"]
 
         self._address = str(device_config[CONF_ADDRESS])
         self._address_int = int(self._address)
@@ -268,6 +288,7 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
             model=device_type_label(self._hass, self._device_type),
         )
         self._attr_device_class = DEVICE_TYPE_TO_DEVICE_CLASS.get(self._device_type)
+        self._attr_icon = DEVICE_TYPE_MAPPING.get(self._device_type, {}).get("icon")
 
         self._position_estimator = PositionEstimator(
             open_time_ms=device_config.get(CONF_OPEN_TIME_MS, DEFAULT_OPEN_TIME_MS),
@@ -328,16 +349,15 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         self._wind: bool | None = None
         self._sun: bool | None = None
         self._cancel_timer: Callable[[], None] | None = None
-
-    @property
-    def icon(self) -> str | None:
-        """Return the icon for the device type."""
-        return DEVICE_TYPE_MAPPING.get(self._device_type, {}).get("icon")
-
-    @property
-    def name(self) -> str | None:
-        """Return the entity name (device carries the friendly name)."""
-        return None
+        self._safety_cancel_timer: Callable[[], None] | None = None
+        # Precise timer for the radio stop frame on an intermediate
+        # target (the safety tick is only a net).
+        self._stop_timer: Callable[[], None] | None = None
+        self._group_stop_retries = 0
+        # Set on removal: an in-flight timer callback must not send radio
+        # or write state afterwards.
+        self._removed = False
+        self._goto_task: asyncio.Task[None] | None = None
 
     @property
     def current_cover_position(self) -> int:
@@ -440,6 +460,7 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
 
     async def async_will_remove_from_hass(self) -> None:
         """Unregister the entity."""
+        self._removed = True  # in-flight callbacks stop at their next await
         registry = self._entry.runtime_data.entities
         registry.pop(self.entity_id, None)
         self._cancel_tilt_task()
@@ -448,6 +469,9 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         if self._recal_task is not None and not self._recal_task.done():
             self._recal_task.cancel()
         self._recal_task = None
+        if self._goto_task is not None and not self._goto_task.done():
+            self._goto_task.cancel()
+        self._goto_task = None
         self._stop_tracking()
         await super().async_will_remove_from_hass()
 
@@ -455,6 +479,10 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         self, command: SomfyCommand, frame_repeats: int = DEFAULT_FRAME_REPEATS
     ) -> None:
         """Send a logical command through the RF transmitter."""
+        # Any new radio command supersedes a pending precise stop frame,
+        # and a direct command ends any group-mirror shadow tracking.
+        self._cancel_stop_timer()
+        self._shadow_tracking = False
         if self._invert:
             command = _INVERT_COMMANDS.get(command, command)
         await self._async_transmit(command, frame_repeats)
@@ -476,21 +504,19 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         step_size: int | None = None,
     ) -> None:
         """Transmit a radio command and register it for loopback filtering."""
-        rolling_code = await self._store.async_get_next(self._address_int)
-        await rf.async_send_command(
+        # No rolling code passed: rf draws it inside the per-transmitter
+        # lock, so the air order always matches the rolling-code order.
+        rolling_code = await rf.async_send_command(
             self._hass,
             self._transmitter_id,
             self._address_int,
             command,
-            rolling_code,
             protocol=self._protocol,
             frame_repeats=frame_repeats,
             step_size=step_size if step_size is not None else self._step_size,
         )
-        # Remember what we sent so the RX handler can ignore the loopback
-        # (the gateway's own receiver hears our transmissions).
-        recent_tx = self._hass.data[DOMAIN].setdefault("recent_tx", {})
-        recent_tx[(self._address_int, rolling_code)] = time.monotonic()
+        # rf.async_send_command stamps recent_tx at air start so the RX
+        # handler ignores the loopback (the gateway hears our bursts).
         _LOGGER.debug(
             "Sent %s to %s (protocol %s, rolling code %d)",
             command.value,
@@ -511,44 +537,187 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         every member estimate reached its target, then the member
         estimates freeze with the group.
         """
+        if self._removed:
+            return
+        started = self._position_estimator.started_at
         if not all(
             member._position_estimator.reached_target()
             for member in members
         ):
-            self.async_write_ha_state()
-            self._notify_parent_groups()
-            return
+            return  # the display tick refreshes the state
         target = self._position_estimator.target
         if target not in (None, 0, 100):
             # Intermediate target: the motors must be stopped on the air.
             try:
                 await self._async_stop_at_target()
             except HomeAssistantError as err:
-                _LOGGER.warning("Failed to stop %s: %s", self.entity_id, err)
+                self._group_stop_retries += 1
+                if self._group_stop_retries >= GROUP_STOP_MAX_RETRIES:
+                    _LOGGER.warning(
+                        "Failed to stop %s after %d attempts: %s",
+                        self.entity_id,
+                        self._group_stop_retries,
+                        err,
+                    )
+                    if self._removed or self._position_estimator.started_at != started:
+                        return  # superseded while the stop was sending
+                    # Give up at the target, not the overshoot.
+                    self._position_estimator.stop_at(target)
+                    self._stop_members_tracking()
+                    self._stop_tracking()
+                    self.async_write_ha_state()
+                    self._notify_parent_groups()
+                    return
+                _LOGGER.warning(
+                    "Failed to stop %s (attempt %d/%d): %s",
+                    self.entity_id,
+                    self._group_stop_retries,
+                    GROUP_STOP_MAX_RETRIES,
+                    err,
+                )
                 self.async_write_ha_state()
                 return  # retry the stop frame on the next tick
+            if self._removed or self._position_estimator.started_at != started:
+                return  # a newer movement superseded this tick
             self._stop_members_tracking()
             # Snap to the target: the last tick may have overshot it.
             self._position_estimator.stop_at(target)
         else:
+            if self._removed or self._position_estimator.started_at != started:
+                return
             self._position_estimator.stop()
         self._stop_tracking()
         self.async_write_ha_state()
         self._notify_parent_groups()
 
     def _start_tracking(self) -> None:
-        """Start periodic position updates while moving."""
+        """Start the display and safety timers while moving."""
+        self._group_stop_retries = 0  # new movement: fresh retry budget
+        self._cancel_stop_timer()  # a new movement supersedes a pending stop
         if self._cancel_timer is not None:
             return
         self._cancel_timer = async_track_time_interval(
-            self._hass, self._async_movement_tick, UPDATE_INTERVAL
+            self._hass, self._async_display_tick, DISPLAY_UPDATE_INTERVAL
+        )
+        self._safety_cancel_timer = async_track_time_interval(
+            self._hass, self._async_movement_tick, SAFETY_TICK_INTERVAL
         )
 
+    @callback
+    def _async_display_tick(self, now: datetime) -> None:
+        """Refresh the displayed position while moving (UI only)."""
+        if self._removed or not self._position_estimator.is_moving:
+            return  # removed, or the safety tick owns the stop
+        self.async_write_ha_state()
+        self._notify_parent_groups()
+
     def _stop_tracking(self) -> None:
-        """Stop periodic position updates."""
+        """Stop the display and safety timers."""
+        self._cancel_stop_timer()
         if self._cancel_timer is not None:
             self._cancel_timer()
             self._cancel_timer = None
+        if self._safety_cancel_timer is not None:
+            self._safety_cancel_timer()
+            self._safety_cancel_timer = None
+
+    def _cancel_stop_timer(self) -> None:
+        """Cancel the pending precise radio stop, if any."""
+        if self._stop_timer is not None:
+            self._stop_timer()
+            self._stop_timer = None
+
+    def _schedule_stop_timer(
+        self, frame_repeats: int, queue_delay_s: float = 0.0
+    ) -> None:
+        """Schedule the radio stop at the exact estimated target time.
+
+        The safety tick is only a net: a target close to
+        an end stop (e.g. 99 %) is reached in a fraction of a second,
+        and waiting for the next tick overshoots it by up to
+        SAFETY_TICK_INTERVAL of travel. The stop frame must go out when the estimate
+        reaches the target, and never while the direction burst is
+        still on air."""
+        self._cancel_stop_timer()
+        estimator = self._position_estimator
+        if not estimator.is_moving or estimator.target in (None, 0, 100):
+            return
+        travel_ms = (
+            estimator.open_time_ms
+            if estimator.direction == "up"
+            else estimator.close_time_ms
+        )
+        remaining_s = (
+            abs(estimator.target - estimator.start_position)
+            / 100.0
+            * travel_ms
+            / 1000.0
+        )
+        direction_command = (
+            SomfyCommand.UP if estimator.direction == "up" else SomfyCommand.DOWN
+        )
+        # The per-transmitter lock holds the air TX_GAP_S past the burst:
+        # align the snap with the moment the stop frame actually airs.
+        min_air_s = (
+            rf.press_air_time_s(direction_command, self._protocol, frame_repeats)
+            + rf.TX_GAP_S
+        )
+        started_at = estimator.started_at
+        self._stop_timer = async_call_later(
+            self._hass,
+            # queue_delay_s: bursts queued ahead of this stop on the shared
+            # transmitter lock (group member commands) delay the moment the
+            # stop frame can actually air.
+            max(remaining_s, min_air_s + queue_delay_s),
+            partial(self._async_stop_timer_fired, started_at=started_at),
+        )
+
+    async def _async_stop_timer_fired(
+        self, now: datetime, started_at: float | None = None
+    ) -> None:
+        """Send the stop frame when the estimate reaches the target.
+
+        ``started_at`` is the movement generation token captured at
+        schedule time; a newer movement supersedes this stop.
+        """
+        self._stop_timer = None
+        if self._removed:
+            return  # removed while this timer was in flight
+        estimator = self._position_estimator
+        if not estimator.is_moving or estimator.target in (None, 0, 100):
+            return
+        target = estimator.target
+        if started_at is None:
+            started_at = estimator.started_at
+        if estimator.started_at != started_at:
+            return  # a newer movement superseded this stop before it aired
+        if self._is_group:
+            # A group stop frame halts EVERY member motor: only send it
+            # once every member estimate reached its own target, like
+            # _async_group_tick does. Otherwise a slow member gets cut
+            # mid-course; the safety tick retries.
+            members = self._group_members()
+            if members and not all(
+                m._position_estimator.reached_target() for m in members
+            ):
+                return
+        try:
+            await self._async_stop_at_target()
+        except HomeAssistantError as err:
+            # Keep the movement tracked: the safety tick retries the stop.
+            _LOGGER.warning("Failed to stop %s: %s", self.entity_id, err)
+            return
+        if self._removed or estimator.started_at != started_at:
+            return  # removed, or a newer movement superseded this stop
+        # The stop frame landed: snap to the target.
+        estimator.stop_at(target)
+        if self._is_group:
+            # The radio stop halts every member motor: freeze
+            # the member estimates with the group.
+            self._stop_members_tracking()
+        self._stop_tracking()
+        self.async_write_ha_state()
+        self._notify_parent_groups()
 
     async def _async_stop_at_target(self) -> None:
         """Stop the motor at an intermediate position."""
@@ -564,11 +733,19 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         else:
             await self._async_send_command(SomfyCommand.STOP)
 
-    async def _async_movement_tick(self, now: Any) -> None:
-        """Update the estimated position, stopping the movement when done."""
-        if not self._position_estimator.is_moving:
+    async def _async_movement_tick(self, now: datetime) -> None:
+        """Safety tick: stop the movement when the target is reached.
+
+        The precise stop timer fires at the exact target time; this
+        tick is only a net for a late/failed timer. The display tick
+        owns the periodic state refresh."""
+        if self._removed:
+            return  # removed while this tick was in flight
+        estimator = self._position_estimator
+        if not estimator.is_moving:
             self._stop_tracking()
             return
+        started = estimator.started_at
         if self._is_group:
             members = self._group_members()
             if members:
@@ -580,6 +757,8 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
             self._position_estimator.stop()
             self._shadow_tracking = False
             self._stop_tracking()
+            self.async_write_ha_state()
+            self._notify_parent_groups()
         elif self._position_estimator.reached_target():
             target = self._position_estimator.target
             if target not in (None, 0, 100):
@@ -587,29 +766,49 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
                 try:
                     await self._async_stop_at_target()
                 except HomeAssistantError as err:
-                    _LOGGER.warning("Failed to stop %s: %s", self.entity_id, err)
-                    self._position_estimator.stop()
-                else:
-                    # The stop frame landed: snap to the target, the last
-                    # tick may have overshot it.
-                    self._position_estimator.stop_at(target)
+                    self._group_stop_retries += 1
+                    if self._group_stop_retries < GROUP_STOP_MAX_RETRIES:
+                        _LOGGER.warning(
+                            "Failed to stop %s (attempt %d/%d): %s",
+                            self.entity_id,
+                            self._group_stop_retries,
+                            GROUP_STOP_MAX_RETRIES,
+                            err,
+                        )
+                        return  # retry the stop frame on the next tick
+                    _LOGGER.warning(
+                        "Failed to stop %s after %d attempts: %s",
+                        self.entity_id,
+                        self._group_stop_retries,
+                        err,
+                    )
+                if self._removed or estimator.started_at != started:
+                    return  # removed, or superseded while the stop was sending
+                # Snap to the target either way: the last tick may have
+                # overshot it, and freezing past the target would make
+                # the next goto start from the wrong position.
+                self._position_estimator.stop_at(target)
                 if self._is_group:
                     # The radio stop halts every member motor: freeze
                     # the member estimates with the group.
                     self._stop_members_tracking()
             else:
+                if self._removed or estimator.started_at != started:
+                    return
                 # End-stop targets need no stop frame: the motors run their
                 # full course, so mirrored members keep their own pace (their
                 # shadow tick stops them at their end stop). Freezing them
                 # here would cut their estimates mid-course.
                 self._position_estimator.stop()
             self._stop_tracking()
-        self.async_write_ha_state()
-        self._notify_parent_groups()
+            self.async_write_ha_state()
+            self._notify_parent_groups()
 
     async def async_open_cover(self, **kwargs: Any) -> None:
         """Open the cover."""
         await self._async_send_command(SomfyCommand.UP)
+        if self._removed:
+            return  # unloaded while the burst was queued
         self._anchor_group_estimate()
         self._position_estimator.start("up", 100)
         self._start_tracking()
@@ -621,6 +820,8 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
     async def async_close_cover(self, **kwargs: Any) -> None:
         """Close the cover."""
         await self._async_send_command(SomfyCommand.DOWN)
+        if self._removed:
+            return  # unloaded while the burst was queued
         self._anchor_group_estimate()
         self._position_estimator.start("down", 0)
         self._start_tracking()
@@ -635,6 +836,8 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
             await self._async_stop_at_target()
         else:
             await self._async_send_command(SomfyCommand.STOP)
+        if self._removed:
+            return  # unloaded while the burst was queued
         self._position_estimator.stop()
         self._stop_tracking()
         if self._is_group:
@@ -643,13 +846,28 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         self._notify_parent_groups()
 
     async def async_set_cover_position(
-        self, frame_repeats: int | None = None, **kwargs: Any
+        self,
+        frame_repeats: int | None = None,
+        queue_delay_s: float = 0.0,
+        **kwargs: Any,
     ) -> None:
         """Move the cover to a specific position."""
         target = int(kwargs["position"])
         if self._invert_position:
             target = 100 - target  # the user thinks in "% closed"
         if self._is_group:
+            if target in (0, 100):
+                # End stop: one group-address burst reaches every
+                # motor and each one cuts at its own end stop, no
+                # per-member stop frame needed (same as open/close).
+                # Always transmitted, even if the group estimate is
+                # already at the target: a resync, at the cost of one
+                # burst.
+                if target == 100:
+                    await self.async_open_cover()
+                else:
+                    await self.async_close_cover()
+                return
             members = self._group_members()
             if members:
                 # A single group-address burst cannot land every
@@ -658,27 +876,73 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
                 # wherever each one happens to be. Command every
                 # member individually (Home Assistant CoverGroup /
                 # ESPSomfyRTS semantics for group positions).
-                for index, member in enumerate(members):
+                # (member, display, direction slot, stop slot)
+                pending: list[tuple[SomfyRTSCover, int, float, float]] = []
+                for member in members:
                     display = (
                         100 - target
                         if member._invert_position
                         else target
                     )
+                    if (
+                        not member._is_group
+                        and not member._position_estimator.is_moving
+                        and display == member.current_cover_position
+                    ):
+                        continue  # already there: no frame, no inter-burst wait
+                    slot = (
+                        rf.press_air_time_s(
+                            SomfyCommand.UP,
+                            member._protocol,
+                            GROUP_MEMBER_FRAME_REPEATS,
+                        )
+                        + GROUP_MEMBER_FRAME_GAP_S
+                    )
+                    # One stop burst per member follows on the same
+                    # transmitter once it reaches its target.
+                    stop_slot = (
+                        rf.press_air_time_s(
+                            SomfyCommand.STOP,
+                            member._protocol,
+                            DEFAULT_FRAME_REPEATS,
+                        )
+                        + rf.TX_GAP_S
+                    )
+                    pending.append((member, display, slot, stop_slot))
+                # A member's stop frame queues on its transmitter lock
+                # behind the direction bursts of the members commanded
+                # after it AND behind the stop frames of the members
+                # commanded before it: hand each member its queue depth
+                # so its stop timer fires when the air is actually free.
+                # Only same-transmitter members share the lock. An outer
+                # group threads its own queue_delay_s in as the base.
+                for index, (member, display, slot, _stop_slot) in enumerate(
+                    pending
+                ):
+                    queue_delay = queue_delay_s
+                    for j in range(index + 1, len(pending)):
+                        if (
+                            pending[j][0]._transmitter_id
+                            == member._transmitter_id
+                        ):
+                            queue_delay += pending[j][2]
+                    for j in range(index):
+                        if (
+                            pending[j][0]._transmitter_id
+                            == member._transmitter_id
+                        ):
+                            queue_delay += pending[j][3]
                     await member.async_set_cover_position(
                         position=display,
                         frame_repeats=GROUP_MEMBER_FRAME_REPEATS,
+                        queue_delay_s=queue_delay,
                     )
-                    if index < len(members) - 1:
+                    if index < len(pending) - 1:
                         # Hold out for the burst to clear the air
                         # before queuing the next member.
-                        await asyncio.sleep(
-                            rf.press_air_time_s(
-                                SomfyCommand.UP,
-                                member._protocol,
-                                GROUP_MEMBER_FRAME_REPEATS,
-                            )
-                            + GROUP_MEMBER_FRAME_GAP_S
-                        )
+                        await asyncio.sleep(slot)
+                if self._removed:
+                    return  # unloaded while the member bursts were queued
                 self.async_write_ha_state()
                 self._notify_parent_groups()
                 return
@@ -686,12 +950,16 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         if target == current:
             return
         direction = "up" if target > current else "down"
+        repeats = frame_repeats or DEFAULT_FRAME_REPEATS
         await self._async_send_command(
             SomfyCommand.UP if direction == "up" else SomfyCommand.DOWN,
-            frame_repeats=frame_repeats or DEFAULT_FRAME_REPEATS,
+            frame_repeats=repeats,
         )
+        if self._removed:
+            return  # unloaded while the burst was queued
         self._position_estimator.start(direction, target)
         self._start_tracking()
+        self._schedule_stop_timer(repeats, queue_delay_s)
         self.async_write_ha_state()
         self._notify_parent_groups()
 
@@ -814,9 +1082,8 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
 
     def _track_members_movement(self, direction: str, target: int) -> None:
         """Move the member estimates with the group (logical target)."""
-        display = 100 - target if self._invert_position else target
         for member in self._group_members():
-            member.async_track_group_movement(direction, display)
+            member.async_track_group_movement(direction, target)
 
     def _stop_members_tracking(self) -> None:
         """Freeze the member estimates when the group stops."""
@@ -824,7 +1091,7 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
             member.async_stop_group_tracking()
 
     def _restore_members_position(self, position: int) -> None:
-        """Anchor the member estimates (display scale)."""
+        """Anchor the member estimates (logical scale)."""
         for member in self._group_members():
             member.async_track_group_restore(position)
 
@@ -844,10 +1111,8 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
             member.async_track_group_tilt_snap(target)
 
     def async_track_group_movement(self, direction: str, target: int) -> None:
-        """Mirror a group movement on this member (no radio)."""
-        display = _clamp(int(target))
-        logical = 100 - display if self._invert_position else display
-        self._position_estimator.start(direction, logical)
+        """Mirror a group movement on this member (no radio, logical target)."""
+        self._position_estimator.start(direction, _clamp(int(target)))
         self._shadow_tracking = True
         self._start_tracking()
         self.async_write_ha_state()
@@ -860,11 +1125,9 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         self.async_write_ha_state()
 
     def async_track_group_restore(self, position: int) -> None:
-        """Anchor the member estimate after a group cycle (display scale)."""
-        display = _clamp(int(position))
-        logical = 100 - display if self._invert_position else display
+        """Anchor the member estimate after a group cycle (logical scale)."""
         self._shadow_tracking = False
-        self._position_estimator.restore(logical)
+        self._position_estimator.restore(_clamp(int(position)))
         self._stop_tracking()
         self.async_write_ha_state()
 
@@ -1000,6 +1263,8 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
                 await self._async_send_command(SomfyCommand.STOP)
             except HomeAssistantError as err:
                 _LOGGER.warning("Failed to stop tilt on %s: %s", self.entity_id, err)
+        if self._removed:
+            return  # unloaded while the burst was queued
         self.async_write_ha_state()
 
     async def async_set_cover_tilt_position(self, **kwargs: Any) -> None:
@@ -1018,6 +1283,8 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
             # Native mode: the motor goes to its own memorized
             # favorite position when it hears MY.
             await self._async_send_command(SomfyCommand.MY)
+            if self._removed:
+                return  # unloaded while the burst was queued
             self._native_my_tracking()
             self.async_write_ha_state()
             self._notify_parent_groups()
@@ -1032,7 +1299,7 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         # async_update_entry call in async_set_my_position_persisted see no
         # change, so nothing is saved to storage and the value reverts to the
         # persisted one on restart. Persisting is the caller's job.
-        self._notify_my_sensors()
+        self._notify_my_position_entities()
         self.async_write_ha_state()
 
     def async_set_my_position_persisted(self, position: int) -> None:
@@ -1046,14 +1313,17 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
             self._entry, data={**self._entry.data, CONF_DEVICES: devices}
         )
 
-    def _notify_my_sensors(self) -> None:
-        """Refresh the My-position sensors attached to this device."""
+    def _notify_my_position_entities(self) -> None:
+        """Refresh the My-position sensor and slider attached to this device."""
         runtime = getattr(self._entry, "runtime_data", None)
         if runtime is None:
             return
-        for sensor in getattr(runtime, "my_sensors", {}).values():
-            if getattr(sensor, "_address", None) == self._address:
-                sensor.async_write_ha_state()
+        for entity in (
+            *getattr(runtime, "my_sensors", {}).values(),
+            *getattr(runtime, "my_numbers", {}).values(),
+        ):
+            if getattr(entity, "_address", None) == self._address:
+                entity.async_write_ha_state()
 
     def async_set_current_position(self, position: int) -> None:
         """Realign the position estimate without moving the motor."""
@@ -1062,7 +1332,7 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         self._position_estimator.restore(logical)
         self._stop_tracking()
         if self._is_group:
-            self._restore_members_position(display)
+            self._restore_members_position(logical)
         self.async_write_ha_state()
         self._notify_parent_groups()
 
@@ -1089,6 +1359,7 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
             "up" if logical > current else "down", logical
         )
         self._start_tracking()
+        self._schedule_stop_timer(DEFAULT_FRAME_REPEATS)
         if self._is_group:
             self._track_members_native_my()
 
@@ -1149,6 +1420,8 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
             await self.async_open_cover()
             travel_ms = self._position_estimator.open_time_ms
         await asyncio.sleep(travel_ms / 1000 * 1.3 + 1)
+        if self._removed:
+            return
         if self._is_group:
             self._stop_members_tracking()
         # Back to where the cover was before the recalibration.
@@ -1216,6 +1489,8 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         assert press is not None
         while time.monotonic() - press["last_seen"] < TILT_PRESS_END_S:
             await asyncio.sleep(_PRESS_POLL_S)
+        if self._removed:
+            return
         self._press = None
         self._press_task = None
         command = press["command"]
@@ -1242,7 +1517,7 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
                 if self._simulate_my:
                     # The motor ignores MY (no memorized favorite):
                     # Home Assistant drives it to its own favorite.
-                    self._hass.async_create_task(
+                    self._goto_task = self._hass.async_create_task(
                         self.async_goto_my_position()
                     )
                 else:
@@ -1293,8 +1568,8 @@ class SomfyRTSCover(TransmitterAvailabilityMixin, CoverEntity, RestoreEntity):
         duration = abs(delta) / 100.0 * self._tilt_time_ms / 1000.0
         while duration > 0:
             await asyncio.sleep(_TILT_TIMED_TICK_S)
-            if self._tilt_track is not track:
-                return  # superseded or cancelled
+            if self._removed or self._tilt_track is not track:
+                return  # removed, superseded or cancelled
             elapsed = time.monotonic() - track["start"]
             if elapsed >= duration:
                 break

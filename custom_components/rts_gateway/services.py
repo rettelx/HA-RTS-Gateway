@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from collections.abc import Callable
 from typing import Any
 
@@ -46,7 +45,6 @@ from .const import (
     SomfyProtocol,
 )
 from .cover import SomfyRTSCover
-from .rolling_code import RollingCodeStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -224,19 +222,13 @@ async def _async_send_prog_press(
     A short press (3 repeats) toggles the pairing while the motor is
     in programming mode; a long press (35 repeats) enters it.
     """
-    store = hass.data.get(DOMAIN, {}).get("rolling_codes")
-    if store is None:
-        store = RollingCodeStore(hass)
-        hass.data.setdefault(DOMAIN, {})["rolling_codes"] = store
     address = entity._address_int
-    rolling_code = await store.async_get_next(address)
     try:
         await rf.async_send_command(
             hass,
             entity._transmitter_id,
             address,
             SomfyCommand.PROG,
-            rolling_code,
             protocol=entity._protocol,
             frame_repeats=frame_repeats,
         )
@@ -246,9 +238,6 @@ async def _async_send_prog_press(
             translation_key="command_failed",
             translation_placeholders={"error": str(err)},
         ) from err
-    # Register for loopback filtering, like every transmission.
-    recent_tx = hass.data.setdefault(DOMAIN, {}).setdefault("recent_tx", {})
-    recent_tx[(address, rolling_code)] = time.monotonic()
 
 _GroupMember = tuple[
     SomfyRTSCover,

@@ -19,7 +19,6 @@ from .const import (
     EVENT_FRAME,
     RX_DUPLICATE_TTL,
     RX_EVENT,
-    TX_LOOPBACK_TTL,
     SomfyCommand,
 )
 from .protocols import BUTTON_TO_COMMAND
@@ -120,15 +119,17 @@ class SomfyRTSRxHandler:
 
         recent_tx = self._hass.data.get(DOMAIN, {}).get("recent_tx", {})
         if len(recent_tx) > 256:
-            for k, ts in list(recent_tx.items()):
-                if now - ts >= TX_LOOPBACK_TTL:
+            for k, until in list(recent_tx.items()):
+                if now >= until:
                     del recent_tx[k]
 
         # Loopback of our own transmissions (the gateway's CC1101 hears
         # the frames Home Assistant sends): the frame is reported once per
         # press like a remote frame, but never forwarded to the entities.
-        sent_at = recent_tx.get(key)
-        is_loopback = sent_at is not None and now - sent_at < TX_LOOPBACK_TTL
+        # recent_tx values are absolute loopback deadlines (stamped by
+        # rf.async_send_command as now + air_time + TX_LOOPBACK_MARGIN_S).
+        sent_until = recent_tx.get(key)
+        is_loopback = sent_until is not None and now < sent_until
 
         if repeat == 1:
             self._fire_frame_event(

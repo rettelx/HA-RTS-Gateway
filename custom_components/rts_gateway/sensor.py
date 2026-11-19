@@ -84,6 +84,7 @@ class SomfyRTSMyPositionSensor(SensorEntity):
     """
 
     _attr_has_entity_name = True
+    _attr_should_poll = False  # pure config value, pushed by the cover
     _attr_translation_key = "my_position"
     _attr_native_unit_of_measurement = PERCENTAGE
 
